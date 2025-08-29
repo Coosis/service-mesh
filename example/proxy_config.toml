@@ -1,0 +1,3 @@
+[route_timeout]
+"/hello" = 3000
+"/*/heelo" = 301

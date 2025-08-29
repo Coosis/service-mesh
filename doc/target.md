@@ -1,19 +1,19 @@
 # Service-Mesh
 ## Side Car Proxy
-- Runs alongside main application
-- Reverse proxy for incoming requests
-- Request retries with exponential backoff
-- Load balancing
-- Health checks
-- Passive health (mark on consecutive 5xx/timeouts) + active /healthz
-- Circuit breaking & outlier ejection (protects backends when they degrade)
-- Per-route timeouts (prevent request pile-ups)
-- LB policy: start with round-robin, add P2C (peak-two-choices) least-loaded
-- Admin port (e.g., :15000) to expose /metrics, /ready, /config
-- Tracing propagation (traceparent / B3) even before full OTEL
-- Graceful drain on shutdown (stop accepting, finish in-flight)
-- Consistent hashing for sticky sessions
-- Request shadowing/mirroring (copy a % to canary)
+[X] Runs alongside main application
+[X] Reverse proxy for incoming requests
+[ ] Load balancing
+[ ] Health checks
+[ ] Passive health (mark on consecutive 5xx/timeouts) + active /healthz
+[ ] Circuit breaking & outlier ejection (protects backends when they degrade)
+[X] Per-route timeouts (prevent request pile-ups)
+[ ] LB policy: start with round-robin, add P2C (peak-two-choices) least-loaded
+[ ] Admin port (e.g., :15000) to expose /metrics, /ready, /config
+[X] Tracing propagation (traceparent) even before full OTEL
+[X] Graceful drain on shutdown (stop accepting, finish in-flight)
+[ ] Consistent hashing for sticky sessions
+[ ] Request shadowing/mirroring (copy a % to canary)
+[ ] TLS termination
 ## Control Plane
 - Access control list
 - mTLS
