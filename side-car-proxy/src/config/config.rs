@@ -7,13 +7,17 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProxyConfig {
     /// per-route timeouts in milliseconds
-    pub route_timeout: HashMap<String, u64>
+    pub route_timeout: HashMap<String, u64>,
+
+    /// A map of endpoint name -> list of addresses
+    pub cluster: HashMap<String, Vec<String>>,
 }
 
 impl ProxyConfig {
     pub fn new() -> Self {
         ProxyConfig {
             route_timeout: HashMap::new(),
+            cluster: HashMap::new(),
         }
     }
 

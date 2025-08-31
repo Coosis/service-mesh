@@ -22,4 +22,7 @@ pub enum ProxyError {
 
     #[error("Some other error: {0}")]
     SomeError(String),
+
+    #[error("No healthy endpoints available")]
+    NoHealthyEndpoints,
 }

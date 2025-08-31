@@ -1,3 +1,6 @@
 [route_timeout]
 "/hello" = 3000
 "/*/heelo" = 301
+
+[cluster]
+someserviceendpoint = ["localhost:8314", "localhost:8315"]

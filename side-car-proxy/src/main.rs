@@ -1,17 +1,21 @@
 use std::error::Error;
 use std::pin::pin;
+use std::str::FromStr;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use http::uri::PathAndQuery;
+use http::uri::{Authority, PathAndQuery};
 use http_body_util::Limited;
 use hyper::header::{HeaderValue, HOST};
 use hyper::{body::Incoming, server::conn::http1, Request, Response};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use hyper_util::{client::legacy::{connect::HttpConnector, Client}, rt::TokioIo};
+use load_balance::{Cluster, Endpoint};
 use tokio::task::JoinSet;
-use tower::{buffer::BufferLayer, limit::{ConcurrencyLimitLayer, GlobalConcurrencyLimitLayer, RateLimitLayer}, retry::RetryLayer, timeout::TimeoutLayer, Layer, ServiceBuilder};
-use tower::{BoxError, ServiceExt};
-use tracing::{debug, debug_span, info_span, warn, Instrument, Span};
+use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
+use tower::BoxError;
+use tracing::{debug, info_span, warn, Instrument, Span};
 use tracing_subscriber::fmt::format::FmtSpan;
 use w3c::ensure_w3c;
 
@@ -20,10 +24,12 @@ mod error;
 mod config;
 mod router;
 mod w3c;
+mod load_balance;
 
 async fn forward(
     r: Request<Incoming>,
-    client: Client<HttpConnector, Limited<Incoming>>
+    client: Client<HttpConnector, Limited<Incoming>>,
+    cluster: Arc<Cluster>,
 ) -> Result<Response<hyper::body::Incoming>> {
     let span = info_span!(
         "Request",
@@ -42,16 +48,26 @@ async fn forward(
 
         // re-write url for client connector
         // tls term at proxy
+
+        // ! uncommnet to use round robin instead!
+        // let ep = match cluster.pick_round_robin() {
+        let ep = match cluster.pick_p2c() {
+            Some(ep) => ep,
+            None => {
+                warn!("No healthy endpoints available");
+                return Err(error::ProxyError::NoHealthyEndpoints);
+            }
+        };
         let uri = http::Uri::builder()
             .scheme("http")
-            .authority("localhost:8314")
+            .authority(ep.authority.clone())
             .path_and_query(parts.uri.path_and_query().map_or(PathAndQuery::from_static("/"), |pq| pq.to_owned()))
             .build()?;
         parts.uri = uri;
 
         parts.headers.insert(
             HOST,
-            HeaderValue::from_static("localhost:8314"),
+            HeaderValue::from_str(&ep.authority.as_str()).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
         );
 
         ensure_w3c(&mut parts.headers);
@@ -65,13 +81,27 @@ async fn forward(
             elapsed_ms = 0_i64,
         );
         let call_span_clone = call_span.clone();
+
+        ep.in_flight.fetch_add(1, Ordering::Relaxed);
         let t0 = std::time::Instant::now();
-        let res = client.request(req).instrument(call_span_clone).await?;
-        let elapsed = t0.elapsed().as_millis() as i64;
+        let res = client.request(req).instrument(call_span_clone).await;
+        let elapsed = t0.elapsed().as_millis() as i64; // tracing
+        let rtt_ms = t0.elapsed().as_millis() as u64; // ewma
+        ep.in_flight.fetch_sub(1, Ordering::Relaxed);
+
+        let ok = match &res {
+            Ok(resp) => {
+                let s = resp.status();
+                s.is_success() || (400..500).contains(&s.as_u16())
+            }
+            Err(_) => false,
+        };
+
+        cluster.observe(&ep, ok, rtt_ms);
+
         call_span.record("elapsed_ms", &elapsed);
         Span::current().record("elapsed_ms", &elapsed);
-
-        Ok::<_, error::ProxyError>(res)
+        Ok::<_, error::ProxyError>(res?)
     }.instrument(span_clone).await?;
 
     let elapsed = t0.elapsed().as_millis() as i64;
@@ -98,6 +128,12 @@ async fn main() -> Result<()> {
     let config = config::ProxyConfig::from_file(&config_path).await?;
     debug!("Loaded config: {:?}", config);
 
+    let endpoints: Vec<Arc<Endpoint>> = config.cluster.iter()
+        .flat_map(|(_, addrs)| addrs.iter())
+        .map(|authority| Arc::new(Endpoint::new(Authority::from_str(authority).expect("valid authority"))))
+        .collect();
+    let cluster = Arc::new(Cluster::new(endpoints));
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8333").await?;
     let client: Client<_, _> = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build(HttpConnector::new());
@@ -108,6 +144,7 @@ async fn main() -> Result<()> {
     let mut tasks = JoinSet::new();
 
     loop {
+        let cluster = cluster.clone();
         tokio::select! {
             res = listener.accept() => {
                 let (stream, _) = res?;
@@ -116,10 +153,10 @@ async fn main() -> Result<()> {
                 let client_clone = client.clone();
                 let route_timeout = config.route_timeout.clone();
                 let svc = tower::service_fn(move |r: Request<Incoming>| {
-                    forward(r, client_clone.clone())
+                    forward(r, client_clone.clone(), cluster.clone())
                 });
                 let svc = ServiceBuilder::new()
-                    // .layer(ConcurrencyLimitLayer::new(512))
+                    .layer(ConcurrencyLimitLayer::new(512))
                     .layer(BufferLayer::new(512))
                     .layer(router::PerRouteTimeoutLayer::new(
                             route_timeout.clone().iter()
