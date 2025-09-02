@@ -21,6 +21,16 @@ async fn main() {
                     (StatusCode::INTERNAL_SERVER_ERROR, format!("Error!"))
                 }
             }
+        }))
+        .route("/healthz", get({
+            let port = port.clone();
+            || async move {
+                if port == "8314" {
+                    (StatusCode::OK, "Healthy")
+                } else {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")
+                }
+            }
         }));
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();

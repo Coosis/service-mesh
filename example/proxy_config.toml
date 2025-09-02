@@ -3,4 +3,5 @@
 "/*/heelo" = 301
 
 [cluster]
-someserviceendpoint = ["localhost:8314", "localhost:8315"]
+someserviceendpoint = ["localhost:8314", "localhost:8315", "localhost:8316", "localhost:8317"]
+# someserviceendpoint = ["localhost:8317"]

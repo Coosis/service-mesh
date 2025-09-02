@@ -46,4 +46,14 @@ impl Ewma {
         self.last.store(now_ms, Ordering::Relaxed);
         self.value.store(new.to_bits(), Ordering::Relaxed);
     }
+
+    pub fn reset(&self) {
+        self.last.store(0, Ordering::Relaxed);
+        self.value.store(f64::NAN.to_bits(), Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn initialized(&self) -> bool {
+        self.last.load(Ordering::Relaxed) != 0
+    }
 }

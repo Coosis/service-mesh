@@ -1,5 +1,6 @@
 use std::sync::{atomic::Ordering, Arc};
 use rand::{rng, seq::index::sample};
+use tracing::debug;
 use crate::load_balance::{Cluster, Endpoint};
 
 impl Cluster {
@@ -17,6 +18,10 @@ impl Cluster {
         let idx = sample(&mut rng, len, 2);
         let e1 = healthy[idx.index(0)];
         let e2 = healthy[idx.index(1)];
+        debug!("p2c candidates: {} (in_flight={} latency={}), {} (in_flight={} latency={})", 
+            e1.authority, e1.in_flight.load(Ordering::Relaxed), e1.latency.get(),
+            e2.authority, e2.in_flight.load(Ordering::Relaxed), e2.latency.get(),
+        );
         
         let fa = e1.in_flight.load(Ordering::Relaxed);
         let fb = e2.in_flight.load(Ordering::Relaxed);
@@ -27,6 +32,11 @@ impl Cluster {
                 return Some(e2.clone());
             }
         }
+
+        debug!("p2c tie break on latency: {} (latency={}), {} (latency={})", 
+            e1.authority, e1.latency.get(),
+            e2.authority, e2.latency.get(),
+        );
 
         // tie break
         let latency_a = e1.latency.get();
@@ -42,8 +52,8 @@ impl Cluster {
                     Some(e2.clone())
                 }
             },
-            (true, false) => Some(e1.clone()),
-            (false, true) => Some(e2.clone()),
+            (true, false) => Some(e2.clone()),
+            (false, true) => Some(e1.clone()),
             (false, false) => if rand::random() { Some(e1.clone()) } else { Some(e2.clone()) },
         }
     }
