@@ -5,6 +5,14 @@ pub enum ProxyError {
     #[error("IO error: {0}")]
     IOError(#[from] tokio::io::Error),
 
+    // tls
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+    #[error("Certificate open error")]
+    CertOpenError,
+    #[error("Certificate malformed error")]
+    CertMalformedError,
+
     #[error("Hyper http error: {0}")]
     HyperHttpError(#[from] hyper::http::Error),
 

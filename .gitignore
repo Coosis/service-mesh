@@ -1,3 +1,9 @@
 /target
 prompt.sh
 *.tar.gz
+*.crt
+*.key
+*.srl
+*.cnf
+*.csr
+*.pem

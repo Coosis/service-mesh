@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::ops::ControlFlow;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -9,7 +8,7 @@ use graceful::run_graceful;
 use http::uri::{Authority, PathAndQuery};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Limited};
-use hyper::body::{Body, Bytes};
+use hyper::body::Bytes;
 use hyper::header::{HeaderValue, HOST};
 use hyper::{body::Incoming, server::conn::http1, Request, Response};
 use hyper_util::server::graceful::GracefulShutdown;
@@ -19,7 +18,6 @@ use load_balance::{Cluster, Endpoint};
 use tokio::task::JoinSet;
 use tokio::try_join;
 use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
-use tower::BoxError;
 use tracing::{debug, info_span, info, warn, Instrument, Span};
 use tracing_subscriber::fmt::format::FmtSpan;
 use w3c::ensure_w3c;
@@ -32,6 +30,7 @@ mod w3c;
 mod load_balance;
 mod admin;
 mod graceful;
+mod tls;
 
 async fn forward(
     r: Request<Incoming>,
@@ -126,8 +125,8 @@ async fn forward(
     Ok(res)
 }
 
-type Result<T> = std::result::Result<T, BoxError>;
-// type Result<T> = std::result::Result<T, error::ProxyError>;
+// type Result<T> = std::result::Result<T, BoxError>;
+type Result<T> = std::result::Result<T, error::ProxyError>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -143,6 +142,19 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "example/proxy_config.toml".to_string());
     let config = config::ProxyConfig::from_file(&config_path).await?;
     debug!("Loaded config: {:?}", config);
+
+    let fullchain = std::env::var("TLS_FULLCHAIN")
+        .unwrap_or_else(|_| {
+            warn!("TLS_FULLCHAIN not set, using fullchain.pem as default");
+            "fullchain.pem".to_string()
+        });
+    let key = std::env::var("TLS_KEY")
+        .unwrap_or_else(|_| {
+            warn!("TLS_KEY not set, using server.key as default");
+            "server.key".to_string()
+        });
+    let tls_config = tls::get_server_config(fullchain, key).unwrap();
+    let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8333").await?;
     let client: Client<_, BoxBody<Bytes, error::ProxyError>> = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
@@ -189,6 +201,13 @@ async fn main() -> Result<()> {
     let client_clone = client.clone();
     let route_timeout = config.route_timeout.clone();
     run_graceful(listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
+        let stream = match tls_acceptor.accept(stream).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("TLS accept error: {}", e);
+                return ControlFlow::Continue(());
+            }
+        };
         let io = TokioIo::new(stream);
 
         let svc = tower::service_fn({

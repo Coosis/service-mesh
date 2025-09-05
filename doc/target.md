@@ -3,7 +3,7 @@
 [X] Runs alongside main application
 [X] Reverse proxy for incoming requests
 [X] Load balancing(round-robin/p2c with least-loaded policy, tie break using latency)
-[ ] Active Health (periodic /healthz checks)
+[X] Active Health (periodic /healthz checks)
 [X] Passive health (mark on consecutive 5xx/timeouts)
 [ ] Circuit breaking
 [X] Outlier ejection (protects backends when they degrade)
