@@ -1,6 +1,5 @@
-use axum::{
-    handler::Handler, http::{self, StatusCode}, routing::{get, post}, Json, Router
-};
+use axum::{http::StatusCode, routing::get, Router};
+use axum_extra::extract::CookieJar;
 use tracing::info;
 
 #[tokio::main]
@@ -14,18 +13,31 @@ async fn main() {
     let app = Router::new()
         .route("/", get({
             let port = port.clone();
-            move || async move { 
+            move |jar: CookieJar| async move { 
                 if port == "8314" {
-                    (StatusCode::OK, format!("Hello from port {port}\n"))
+                    if jar.get("x-client-id").is_some() {
+                        return (StatusCode::OK, jar, format!("Hello from port {port}\n"));
+                    }
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", uuid));
+                    (StatusCode::OK, jar, format!("Hello from port {port}\n"))
+                } else if port == "8315" {
+                    if jar.get("x-client-id").is_some() {
+                        return (StatusCode::OK, jar, format!("Hello from port {port}\n"));
+                    }
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", uuid));
+                    (StatusCode::OK, jar, format!("Hello from port {port}\n"))
                 } else {
-                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Error!"))
+                    let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", "hihi"));
+                    (StatusCode::INTERNAL_SERVER_ERROR, jar, format!("Error!"))
                 }
             }
         }))
         .route("/healthz", get({
             let port = port.clone();
             || async move {
-                if port == "8314" {
+                if port == "8314" || port == "8315" {
                     (StatusCode::OK, "Healthy")
                 } else {
                     (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")

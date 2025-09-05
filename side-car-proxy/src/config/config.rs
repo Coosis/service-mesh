@@ -9,7 +9,7 @@ pub struct ProxyConfig {
     /// per-route timeouts in milliseconds
     pub route_timeout: HashMap<String, u64>,
 
-    /// A map of endpoint name -> list of addresses
+    /// A map of service name -> list of addresses
     pub cluster: HashMap<String, Vec<String>>,
 }
 

@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use admin::admin_handler;
 use graceful::run_graceful;
+use http::header::COOKIE;
 use http::uri::{Authority, PathAndQuery};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Limited};
@@ -31,11 +32,14 @@ mod load_balance;
 mod admin;
 mod graceful;
 mod tls;
+mod hash;
 
 async fn forward(
     r: Request<Incoming>,
     client: Client<HttpConnector, BoxBody<Bytes, error::ProxyError>>,
     cluster: Arc<Cluster>,
+
+    ring: Option<Arc<hash::ring::HashRing>>,
 ) -> Result<Response<hyper::body::Incoming>> {
     let span = info_span!(
         "Request",
@@ -55,15 +59,47 @@ async fn forward(
         // re-write url for client connector
         // tls term at proxy
 
-        // ! uncommnet to use round robin instead!
-        // let ep = match cluster.pick_round_robin() {
-        let ep = match cluster.pick_p2c() {
-            Some(ep) => ep,
-            None => {
-                warn!("No healthy endpoints available");
+        let sid = parts.headers.get_all(COOKIE).iter()
+            .find_map(|val| {
+                let s = val.to_str().ok()?;
+                // Cookie header format: "a=1; b=2; c=3"
+                for pair in s.split(';') {
+                    let pair = pair.trim();
+                    if let Some((k, v)) = pair.split_once('=') {
+                        if k == "x-client-id" {
+                            return Some(v.to_string());
+                        }
+                    }
+                }
+                None
+            });
+        let ep: Arc<Endpoint>;
+        if let Some(ring) = ring && let Some(sid) = sid {
+            // Prefer the sticky endpoint, but skip ejected/unhealthy ones.
+            if let Some(idx) = ring.get_index_filtered(&sid, |i| {
+                cluster.endpoints[i].healthy.load(Ordering::Relaxed)
+            }) {
+                info!("Routing sid={} to endpoint idx={} (sticky, healthy)", sid, idx);
+                ep = cluster.endpoints[idx].clone();
+            } else if let Some(p2c_ep) = cluster.pick_p2c() {
+                // No healthy node along the ring path; fall back to p2c.
+                warn!("No healthy endpoints in ring walk for sid={}; falling back to p2c", sid);
+                ep = p2c_ep;
+            } else {
+                warn!("No healthy endpoints available (ring & p2c)");
                 return Err(error::ProxyError::NoHealthyEndpoints);
             }
-        };
+        } else {
+            // ! uncommnet to use round robin instead!
+            // let ep = match cluster.pick_round_robin() {
+            ep = match cluster.pick_p2c() {
+                Some(ep) => ep,
+                None => {
+                    warn!("No healthy endpoints available");
+                    return Err(error::ProxyError::NoHealthyEndpoints);
+                }
+            };
+        }
         let uri = http::Uri::builder()
             .scheme("http")
             .authority(ep.authority.clone())
@@ -170,6 +206,16 @@ async fn main() -> Result<()> {
     ));
     cluster.clone().spawn_active_health();
 
+    let secret: [u8; 32] = *b"abcdabcdabcdabcdabcdabcdabcdabcd";
+    let mut ring = hash::ring::HashRing::new(secret);
+    ring.build_mp(
+        cluster.endpoints
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.authority.as_str(), i))
+    );
+    let ring = Arc::new(ring);
+
     let admin_handle = tokio::spawn({
         let admin_listener = tokio::net::TcpListener::bind("0.0.0.0:15000").await?;
 
@@ -200,6 +246,7 @@ async fn main() -> Result<()> {
     let cluster_clone = cluster.clone();
     let client_clone = client.clone();
     let route_timeout = config.route_timeout.clone();
+    let ring_clone = ring.clone();
     run_graceful(listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
         let stream = match tls_acceptor.accept(stream).await {
             Ok(s) => s,
@@ -213,8 +260,9 @@ async fn main() -> Result<()> {
         let svc = tower::service_fn({
             let client_clone = client_clone.clone();
             let cluster_clone = cluster_clone.clone();
+            let ring_clone = ring_clone.clone();
             move |r: Request<Incoming>| {
-                forward(r, client_clone.clone(), cluster_clone.clone())
+                forward(r, client_clone.clone(), cluster_clone.clone(), Some(ring_clone.clone()))
             }
         });
         let svc = ServiceBuilder::new()
