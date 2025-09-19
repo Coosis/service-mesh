@@ -27,7 +27,7 @@ impl Cluster {
         client: hyper_util::client::legacy::Client<HttpConnector, BoxBody<Bytes, ProxyError>>,
         endpoints: Vec<Arc<Endpoint>>,
     ) -> Self {
-        Self { 
+        let c = Self {
             endpoints,
             cursor: AtomicUsize::new(0),
             origin: std::time::Instant::now(),
@@ -35,7 +35,12 @@ impl Cluster {
 
             consec_fail_threshold: 3,
             client,
+        };
+        let now_ms = c.now_ms();
+        for ep in &c.endpoints {
+            ep.breaker.record(now_ms, true);
         }
+        c
     }
 
     #[inline]
@@ -118,7 +123,7 @@ impl Cluster {
     }
 
     #[inline]
-    fn now_ms(&self) -> u64 {
+    pub fn now_ms(&self) -> u64 {
         self.origin.elapsed().as_millis() as u64
     }
 

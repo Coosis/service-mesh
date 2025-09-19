@@ -43,7 +43,8 @@ async fn main() {
                     (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")
                 }
             }
-        }));
+        }))
+        .route("/bad", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Bad") }));
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
     info!("Listening on {}", port);

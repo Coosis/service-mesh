@@ -8,7 +8,7 @@ use graceful::run_graceful;
 use http::header::COOKIE;
 use http::uri::{Authority, PathAndQuery};
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Limited};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::header::{HeaderValue, HOST};
 use hyper::{body::Incoming, server::conn::http1, Request, Response};
@@ -33,6 +33,7 @@ mod admin;
 mod graceful;
 mod tls;
 mod hash;
+mod circuit_breaker;
 
 async fn forward(
     r: Request<Incoming>,
@@ -40,7 +41,7 @@ async fn forward(
     cluster: Arc<Cluster>,
 
     ring: Option<Arc<hash::ring::HashRing>>,
-) -> Result<Response<hyper::body::Incoming>> {
+) -> Result<Response<BoxBody<Bytes, error::ProxyError>>> {
     let span = info_span!(
         "Request",
         method = %r.method(),
@@ -50,7 +51,7 @@ async fn forward(
     let span_clone = span.clone();
     let t0 = std::time::Instant::now();
 
-    let res = async move {
+    let res: Result<Response<BoxBody<Bytes, error::ProxyError>>> = async move {
         let (mut parts, body) = r.into_parts();
 
         // per RFC 9110, drop specific headers
@@ -126,6 +127,20 @@ async fn forward(
         );
         let call_span_clone = call_span.clone();
 
+        let now_ms = cluster.now_ms();
+        if !ep.breaker.allow(now_ms) {
+            use hyper::StatusCode;
+            let body = Full::new(Bytes::from("Service Unavailable"))
+                .map_err(|e| error::ProxyError::SomeError(format!("Full body error: {}", e)))
+                .boxed();
+            let resp = Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(body)
+                .map_err(|e| error::ProxyError::SomeError(format!("resp build: {e}")))?;
+            warn!("Circuit breaker open for {}, rejecting request", ep.authority);
+            return Ok(resp);
+        }
+
         ep.in_flight.fetch_add(1, Ordering::Relaxed);
         let t0 = std::time::Instant::now();
         let res = client.request(req).instrument(call_span_clone).await;
@@ -148,17 +163,26 @@ async fn forward(
         if !ok {
             warn!("Request to {} failed", ep.authority);
         }
+        // comment out to test out circuit breaker
         cluster.observe(&ep, ok, rtt_ms);
+
+        ep.breaker.record(cluster.now_ms(), ok);
 
         call_span.record("elapsed_ms", &elapsed);
         Span::current().record("elapsed_ms", &elapsed);
-        Ok::<_, error::ProxyError>(res?)
-    }.instrument(span_clone).await?;
+        let res = res?;
+        let (parts, body) = res.into_parts();
+        let body = body
+            .map_err(|e| error::ProxyError::SomeError(format!("Response body error: {}", e)))
+            .boxed();
+        let proxied = Response::from_parts(parts, body);
+        Ok::<Response<BoxBody<Bytes, error::ProxyError>>, error::ProxyError>(proxied)
+    }.instrument(span_clone).await;
 
     let elapsed = t0.elapsed().as_millis() as i64;
     span.record("elapsed_ms", &elapsed);
 
-    Ok(res)
+    res
 }
 
 // type Result<T> = std::result::Result<T, BoxError>;

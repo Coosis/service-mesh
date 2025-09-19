@@ -5,7 +5,7 @@
 [X] Load balancing(round-robin/p2c with least-loaded policy, tie break using latency)
 [X] Active Health (periodic /healthz checks)
 [X] Passive health (mark on consecutive 5xx/timeouts)
-[ ] Circuit breaking
+[X] Circuit breaking
 [X] Outlier ejection (protects backends when they degrade)
 [X] Per-route timeouts (prevent request pile-ups)
 [ ] Admin port (e.g., :15000) exposing /metrics, /ready, /config

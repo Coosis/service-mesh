@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use http::uri::Authority;
+use crate::circuit_breaker::CircuitBreaker;
+
 use super::p2c::Ewma;
 
 const EWMA_TAU: f64 = 10_000.0;
@@ -13,6 +15,8 @@ pub struct Endpoint {
 
     pub in_flight: AtomicUsize,
     pub consec_fail: AtomicUsize,
+
+    pub breaker: CircuitBreaker,
 }
 
 impl Endpoint {
@@ -25,6 +29,11 @@ impl Endpoint {
 
             in_flight: AtomicUsize::new(0),
             consec_fail: AtomicUsize::new(0),
+
+            breaker: CircuitBreaker::new(
+                0,
+                crate::circuit_breaker::CircuitConfig::default(),
+            ),
         }
     }
 }
