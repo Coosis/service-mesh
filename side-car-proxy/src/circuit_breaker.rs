@@ -29,7 +29,7 @@ impl Default for CircuitConfig {
 
 #[repr(usize)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum State { Closed = 0, Open = 1, HalfOpen = 2 }
+pub enum BreakerState { Closed = 0, Open = 1, HalfOpen = 2 }
 
 struct Window {
     start_ms: u64,
@@ -60,7 +60,7 @@ impl CircuitBreaker {
     pub fn new(now_ms: u64, cfg: CircuitConfig) -> Self {
         Self {
             cfg,
-            state: AtomicUsize::new(State::Closed as usize),
+            state: AtomicUsize::new(BreakerState::Closed as usize),
             opened_at_ms: AtomicU64::new(0),
             win: Mutex::new(Window::new(now_ms)),
             half_open_probes: AtomicUsize::new(0),
@@ -69,26 +69,26 @@ impl CircuitBreaker {
     }
 
     #[inline]
-    fn load_state(&self) -> State {
+    pub fn load_state(&self) -> BreakerState {
         match self.state.load(Ordering::Acquire) {
-            0 => State::Closed,
-            1 => State::Open,
-            _ => State::HalfOpen,
+            0 => BreakerState::Closed,
+            1 => BreakerState::Open,
+            _ => BreakerState::HalfOpen,
         }
     }
 
-    fn set_state(&self, s: State, now_ms: u64) {
+    fn set_state(&self, s: BreakerState, now_ms: u64) {
         match s {
-            State::Closed => {
+            BreakerState::Closed => {
                 // reset Closed window fresh
                 *self.win.lock().unwrap() = Window::new(now_ms);
             }
-            State::Open => {
+            BreakerState::Open => {
                 self.opened_at_ms.store(now_ms, Ordering::Release);
                 self.half_open_probes.store(0, Ordering::Relaxed);
                 self.half_open_successes.store(0, Ordering::Relaxed);
             }
-            State::HalfOpen => {
+            BreakerState::HalfOpen => {
                 self.half_open_probes.store(0, Ordering::Relaxed);
                 self.half_open_successes.store(0, Ordering::Relaxed);
             }
@@ -99,17 +99,17 @@ impl CircuitBreaker {
     /// should we allow this request
     pub fn allow(&self, now_ms: u64) -> bool {
         match self.load_state() {
-            State::Closed => true,
-            State::Open => {
+            BreakerState::Closed => true,
+            BreakerState::Open => {
                 let opened = self.opened_at_ms.load(Ordering::Acquire);
                 if now_ms.saturating_sub(opened) >= self.cfg.open_duration_ms {
-                    self.set_state(State::HalfOpen, now_ms);
+                    self.set_state(BreakerState::HalfOpen, now_ms);
                     true // probe
                 } else {
                     false // fail-fast
                 }
             }
-            State::HalfOpen => {
+            BreakerState::HalfOpen => {
                 let probes = self.half_open_probes.fetch_add(1, Ordering::Relaxed) as u64 + 1;
                 probes <= self.cfg.half_open_max_probes
             }
@@ -119,7 +119,7 @@ impl CircuitBreaker {
     /// Record outcome after a request completes
     pub fn record(&self, now_ms: u64, ok: bool) {
         match self.load_state() {
-            State::Closed => {
+            BreakerState::Closed => {
                 let mut w = self.win.lock().unwrap();
                 w.rotate_if_needed(now_ms, self.cfg.window_ms);
                 w.req += 1;
@@ -129,22 +129,22 @@ impl CircuitBreaker {
                     let ratio = (w.fail as f64) / (w.req as f64);
                     if ratio >= self.cfg.failure_ratio {
                         drop(w);
-                        self.set_state(State::Open, now_ms);
+                        self.set_state(BreakerState::Open, now_ms);
                         // warn!("circuit breaker opened");
                     }
                 }
             }
-            State::Open => { }
-            State::HalfOpen => {
+            BreakerState::Open => { }
+            BreakerState::HalfOpen => {
                 if ok {
                     let succ = self.half_open_successes.fetch_add(1, Ordering::Relaxed) as u64 + 1;
                     let probes = self.half_open_probes.load(Ordering::Relaxed) as u64;
                     if succ >= self.cfg.half_open_successes_to_close || probes >= self.cfg.half_open_max_probes {
-                        self.set_state(State::Closed, now_ms);
+                        self.set_state(BreakerState::Closed, now_ms);
                         // warn!("circuit breaker closed");
                     }
                 } else {
-                    self.set_state(State::Open, now_ms); // any failure -> Open
+                    self.set_state(BreakerState::Open, now_ms); // any failure -> Open
                 }
             }
         }

@@ -1,3 +1,4 @@
+use opentelemetry_otlp::ExporterBuildError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -12,6 +13,10 @@ pub enum ProxyError {
     CertOpenError,
     #[error("Certificate malformed error")]
     CertMalformedError,
+
+    // otel
+    #[error("OpenTelemetry error: {0}")]
+    ExporterBuildError(#[from] ExporterBuildError),
 
     #[error("Hyper http error: {0}")]
     HyperHttpError(#[from] hyper::http::Error),
@@ -33,4 +38,7 @@ pub enum ProxyError {
 
     #[error("No healthy endpoints available")]
     NoHealthyEndpoints,
+
+    #[error("JSON error: {0}")]
+    JSONError(#[from] serde_json::Error),
 }

@@ -9,6 +9,9 @@ fn blake3_64_keyed(bytes: &[u8], key32: [u8; 32]) -> u64 {
     u64::from_le_bytes(hasher.as_bytes()[0..8].try_into().unwrap())
 }
 
+// takes endpoints and their indices, builds a hash ring in u64 space
+// takes a client id, do hash with secret into u64 space
+// find the closest endpoint clockwise on the ring
 pub struct HashRing {
     /// hash -> node_id
     mp_idx: Vec<(u64, usize)>,

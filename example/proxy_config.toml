@@ -1,3 +1,6 @@
+# RoundRobin, P2C
+strategy = "RoundRobin"
+
 [route_timeout]
 "/hello" = 3000
 "/*/heelo" = 301

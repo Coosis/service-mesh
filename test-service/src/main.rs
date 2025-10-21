@@ -1,4 +1,11 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
+use axum::body::Body;
 use axum::{http::StatusCode, routing::get, Router};
+use futures_util::stream;
+use hyper::header;
+use hyper::body::Bytes;
 use axum_extra::extract::CookieJar;
 use tracing::info;
 
@@ -13,13 +20,15 @@ async fn main() {
     let app = Router::new()
         .route("/", get({
             let port = port.clone();
-            move |jar: CookieJar| async move { 
+            async move |headers: axum::http::HeaderMap, jar: CookieJar| {
+                info!("Headers: {:?}", headers);
                 if port == "8314" {
                     if jar.get("x-client-id").is_some() {
                         return (StatusCode::OK, jar, format!("Hello from port {port}\n"));
                     }
                     let uuid = uuid::Uuid::new_v4().to_string();
                     let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", uuid));
+                    // debug!("{:?}", )
                     (StatusCode::OK, jar, format!("Hello from port {port}\n"))
                 } else if port == "8315" {
                     if jar.get("x-client-id").is_some() {
@@ -43,6 +52,20 @@ async fn main() {
                     (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")
                 }
             }
+        }))
+        .route("/sleep", get(|| async {
+            let s = stream::once(async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok::<Bytes, Infallible>(Bytes::from_static(b"hello after 5s\n"))
+            });
+
+            let body = Body::from_stream(s);
+
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain")],
+                body,
+            )
         }))
         .route("/bad", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Bad") }));
 

@@ -16,18 +16,24 @@ use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use hyper_util::{client::legacy::{connect::HttpConnector, Client}, rt::TokioIo};
 use load_balance::{Cluster, Endpoint};
+use opentelemetry::{global, Context, KeyValue};
+use opentelemetry_http::{HeaderExtractor, HeaderInjector};
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 use tokio::try_join;
 use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
-use tracing::{debug, info_span, info, warn, Instrument, Span};
+use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
-use w3c::ensure_w3c;
+
+use opentelemetry::trace::{Span as OtelSpan, SpanKind, Status, TraceContextExt, Tracer};
+
+use crate::tel::otel::{self, init_tracer_exporter, init_tracer_provider, init_tracing_and_propagation};
 
 mod util;
+mod tel;
 mod error;
 mod config;
 mod router;
-mod w3c;
 mod load_balance;
 mod admin;
 mod graceful;
@@ -35,31 +41,50 @@ mod tls;
 mod hash;
 mod circuit_breaker;
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub enum LoadBalanceStrategy {
+    #[default]
+    P2C,
+    RoundRobin,
+}
+
+/// main forward utility. first time, we pick an endpoint by either:
+/// 1. p2c
+/// 2. round robin
+/// after we pick an endpoint, we route to that endpoint
+/// that specific endpoint is able to set "x-client-id" for client to opt-in sticky session
+/// 
+/// next time, if "x-client-id" is present in cookie header, we use consistent hashing to pick the
+/// endpoint
+/// otherwise, repeat the above process
 async fn forward(
     r: Request<Incoming>,
     client: Client<HttpConnector, BoxBody<Bytes, error::ProxyError>>,
     cluster: Arc<Cluster>,
 
+    strat: LoadBalanceStrategy,
     ring: Option<Arc<hash::ring::HashRing>>,
 ) -> Result<Response<BoxBody<Bytes, error::ProxyError>>> {
-    let span = info_span!(
-        "Request",
-        method = %r.method(),
-        path = %r.uri().path(),
-        elapsed_ms = 0_i64,
-    );
-    let span_clone = span.clone();
     let t0 = std::time::Instant::now();
 
-    let res: Result<Response<BoxBody<Bytes, error::ProxyError>>> = async move {
-        let (mut parts, body) = r.into_parts();
+    let (mut parts, body) = r.into_parts();
+    let parent_ctx = global::get_text_map_propagator(|prop| {
+        prop.extract(&HeaderExtractor(&parts.headers))
+    });
 
+    let tracer = otel::get_tracer();
+    let otel_span = tracer.span_builder(format!("{} {}", parts.method, parts.uri.path()))
+        .with_kind(SpanKind::Server)
+        .start_with_context(tracer, &parent_ctx);
+
+    let (res, cx): (Result<Response<BoxBody<Bytes, error::ProxyError>>>, Context) = {
         // per RFC 9110, drop specific headers
         util::strip_hop_by_hop(&mut parts.headers);
 
         // re-write url for client connector
         // tls term at proxy
 
+        // endpoint selection
         let sid = parts.headers.get_all(COOKIE).iter()
             .find_map(|val| {
                 let s = val.to_str().ok()?;
@@ -92,15 +117,28 @@ async fn forward(
             }
         } else {
             // ! uncommnet to use round robin instead!
-            // let ep = match cluster.pick_round_robin() {
-            ep = match cluster.pick_p2c() {
-                Some(ep) => ep,
-                None => {
-                    warn!("No healthy endpoints available");
-                    return Err(error::ProxyError::NoHealthyEndpoints);
+            ep = match strat {
+                LoadBalanceStrategy::P2C => {
+                    match cluster.pick_p2c() {
+                        Some(ep) => ep,
+                        None => {
+                            warn!("No healthy endpoints available");
+                            return Err(error::ProxyError::NoHealthyEndpoints);
+                        }
+                    }
+                }
+                LoadBalanceStrategy::RoundRobin => {
+                    match cluster.pick_round_robin() {
+                        Some(ep) => ep,
+                        None => {
+                            warn!("No healthy endpoints available");
+                            return Err(error::ProxyError::NoHealthyEndpoints);
+                        }
+                    }
                 }
             };
         }
+
         let uri = http::Uri::builder()
             .scheme("http")
             .authority(ep.authority.clone())
@@ -113,19 +151,17 @@ async fn forward(
             HeaderValue::from_str(&ep.authority.as_str()).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
         );
 
-        ensure_w3c(&mut parts.headers);
+        // ensure_w3c(&mut parts.headers);
 
         let limit = Limited::new(body, 2 * 1024 * 1024)
             .map_err(|e| error::ProxyError::SomeError(format!("Body size limit error: {}", e)))
             .boxed();
-        let req = Request::from_parts(parts, limit);
 
-        let call_span = info_span!(
-            "Hop", 
-            to = %req.uri(),
-            elapsed_ms = 0_i64,
-        );
-        let call_span_clone = call_span.clone();
+        let cx = Context::current_with_span(otel_span);
+        global::get_text_map_propagator(|prop| {
+            prop.inject_context(&cx, &mut HeaderInjector(&mut parts.headers))
+        });
+        let req = Request::from_parts(parts, limit);
 
         let now_ms = cluster.now_ms();
         if !ep.breaker.allow(now_ms) {
@@ -143,8 +179,9 @@ async fn forward(
 
         ep.in_flight.fetch_add(1, Ordering::Relaxed);
         let t0 = std::time::Instant::now();
-        let res = client.request(req).instrument(call_span_clone).await;
+        let res = client.request(req).await;
         let elapsed = t0.elapsed().as_millis() as i64; // tracing
+        cx.span().set_attribute(KeyValue::new("upstream_elapsed_ms", elapsed));
         let rtt_ms = t0.elapsed().as_millis() as u64; // ewma
         ep.in_flight.fetch_sub(1, Ordering::Relaxed);
 
@@ -152,7 +189,7 @@ async fn forward(
             Ok(resp) => {
                 let s = resp.status();
                 debug!("Response from {}: {}", ep.authority, s);
-                s.is_success() || (400u16..500u16).contains(&s.as_u16())
+                s.is_success() || !(400u16..500u16).contains(&s.as_u16())
             }
             Err(_) => {
                 debug!("Request error to {}", ep.authority);
@@ -162,25 +199,34 @@ async fn forward(
 
         if !ok {
             warn!("Request to {} failed", ep.authority);
+            cx.span().set_status(Status::error("Upstream request failed"));
         }
         // comment out to test out circuit breaker
         cluster.observe(&ep, ok, rtt_ms);
+        cx.span().set_status(if ok {
+            Status::Ok
+        } else {
+            Status::error("Upstream request failed")
+        });
 
         ep.breaker.record(cluster.now_ms(), ok);
 
-        call_span.record("elapsed_ms", &elapsed);
-        Span::current().record("elapsed_ms", &elapsed);
+        cx.span().set_attribute(KeyValue::new("upstream", ep.authority.as_str().to_string()));
         let res = res?;
         let (parts, body) = res.into_parts();
         let body = body
             .map_err(|e| error::ProxyError::SomeError(format!("Response body error: {}", e)))
             .boxed();
         let proxied = Response::from_parts(parts, body);
-        Ok::<Response<BoxBody<Bytes, error::ProxyError>>, error::ProxyError>(proxied)
-    }.instrument(span_clone).await;
+        (
+            Ok::<Response<BoxBody<Bytes, error::ProxyError>>, error::ProxyError>(proxied),
+            cx
+        )
+    };
 
     let elapsed = t0.elapsed().as_millis() as i64;
-    span.record("elapsed_ms", &elapsed);
+    debug!("Total elapsed time: {} ms", elapsed);
+    cx.span().set_attribute(KeyValue::new("elapsed_ms", elapsed));
 
     res
 }
@@ -196,11 +242,14 @@ async fn main() -> Result<()> {
         .with_target(true)
         .init();
 
-    // let p = init_tracing().expect("failed to init tracing");
+    init_tracer_provider();
+    init_tracing_and_propagation();
+    init_tracer_exporter().expect("failed to init tracer exporter");
 
     let config_path = std::env::var("PROXY_CONFIG")
         .unwrap_or_else(|_| "example/proxy_config.toml".to_string());
     let config = config::ProxyConfig::from_file(&config_path).await?;
+    debug!("Using load balancing strategy: {:?}", config.strategy);
     debug!("Loaded config: {:?}", config);
 
     let fullchain = std::env::var("TLS_FULLCHAIN")
@@ -240,16 +289,18 @@ async fn main() -> Result<()> {
     );
     let ring = Arc::new(ring);
 
+    let config_clone = config.clone();
+    let cluster_clone = cluster.clone();
     let admin_handle = tokio::spawn({
         let admin_listener = tokio::net::TcpListener::bind("0.0.0.0:15000").await?;
 
-        let cluster = cluster.clone();
         run_graceful(admin_listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
             let io = TokioIo::new(stream);
             let svc = tower::service_fn({
-                let cluster = cluster.clone();
+                let cluster_clone = cluster_clone.clone();
+                let config_clone = config_clone.clone();
                 move |r: Request<Incoming>| {
-                    admin_handler(r, cluster.clone())
+                    admin_handler(r, cluster_clone.clone(), config_clone.clone())
                 }
             });
             let svc = TowerToHyperService::new(svc);
@@ -271,6 +322,7 @@ async fn main() -> Result<()> {
     let client_clone = client.clone();
     let route_timeout = config.route_timeout.clone();
     let ring_clone = ring.clone();
+    let strat = config.strategy.clone();
     run_graceful(listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
         let stream = match tls_acceptor.accept(stream).await {
             Ok(s) => s,
@@ -285,8 +337,15 @@ async fn main() -> Result<()> {
             let client_clone = client_clone.clone();
             let cluster_clone = cluster_clone.clone();
             let ring_clone = ring_clone.clone();
+            let strat = strat.clone();
             move |r: Request<Incoming>| {
-                forward(r, client_clone.clone(), cluster_clone.clone(), Some(ring_clone.clone()))
+                forward(
+                    r, 
+                    client_clone.clone(),
+                    cluster_clone.clone(),
+                    strat.clone(),
+                    Some(ring_clone.clone())
+                )
             }
         });
         let svc = ServiceBuilder::new()
