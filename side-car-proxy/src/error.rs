@@ -14,6 +14,10 @@ pub enum ProxyError {
     #[error("Certificate malformed error")]
     CertMalformedError,
 
+    // reqwest
+    #[error("Reqwest error: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+
     // otel
     #[error("OpenTelemetry error: {0}")]
     ExporterBuildError(#[from] ExporterBuildError),

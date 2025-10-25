@@ -1,6 +1,7 @@
 # RoundRobin, P2C
 strategy = "RoundRobin"
 
+# per-route timeout, supports wildcard * in path, in milliseconds
 [route_timeout]
 "/hello" = 3000
 "/*/heelo" = 301

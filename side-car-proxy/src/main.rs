@@ -1,38 +1,29 @@
-use std::error::Error;
-use std::ops::ControlFlow;
-use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use admin::admin_handler;
-use graceful::run_graceful;
 use http::header::COOKIE;
-use http::uri::{Authority, PathAndQuery};
+use http::uri::PathAndQuery;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::header::{HeaderValue, HOST};
-use hyper::{body::Incoming, server::conn::http1, Request, Response};
-use hyper_util::server::graceful::GracefulShutdown;
-use hyper_util::service::TowerToHyperService;
-use hyper_util::{client::legacy::{connect::HttpConnector, Client}, rt::TokioIo};
+use hyper::{body::Incoming, Request, Response};
+use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use load_balance::{Cluster, Endpoint};
 use opentelemetry::{global, Context, KeyValue};
 use opentelemetry_http::{HeaderExtractor, HeaderInjector};
-use serde::{Deserialize, Serialize};
-use tokio::task::JoinSet;
-use tokio::try_join;
-use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use opentelemetry::trace::{Span as OtelSpan, SpanKind, Status, TraceContextExt, Tracer};
 
+use crate::instance::start_instance;
 use crate::tel::otel::{self, init_tracer_exporter, init_tracer_provider, init_tracing_and_propagation};
+use side_car_proxy::LoadBalanceStrategy;
+use side_car_proxy::error;
+use side_car_proxy::config;
 
 mod util;
 mod tel;
-mod error;
-mod config;
 mod router;
 mod load_balance;
 mod admin;
@@ -40,13 +31,7 @@ mod graceful;
 mod tls;
 mod hash;
 mod circuit_breaker;
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub enum LoadBalanceStrategy {
-    #[default]
-    P2C,
-    RoundRobin,
-}
+mod instance;
 
 /// main forward utility. first time, we pick an endpoint by either:
 /// 1. p2c
@@ -246,12 +231,12 @@ async fn main() -> Result<()> {
     init_tracing_and_propagation();
     init_tracer_exporter().expect("failed to init tracer exporter");
 
-    let config_path = std::env::var("PROXY_CONFIG")
-        .unwrap_or_else(|_| "example/proxy_config.toml".to_string());
-    let config = config::ProxyConfig::from_file(&config_path).await?;
-    debug!("Using load balancing strategy: {:?}", config.strategy);
-    debug!("Loaded config: {:?}", config);
-
+    // let config_path = std::env::var("PROXY_CONFIG")
+    //     .unwrap_or_else(|_| "example/proxy_config.toml".to_string());
+    // let config = config::ProxyConfig::from_file(&config_path).await?;
+    // debug!("Using load balancing strategy: {:?}", config.strategy);
+    // debug!("Loaded config: {:?}", config);
+    // 
     let fullchain = std::env::var("TLS_FULLCHAIN")
         .unwrap_or_else(|_| {
             warn!("TLS_FULLCHAIN not set, using fullchain.pem as default");
@@ -265,118 +250,67 @@ async fn main() -> Result<()> {
     let tls_config = tls::get_server_config(fullchain, key).unwrap();
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8333").await?;
     let client: Client<_, BoxBody<Bytes, error::ProxyError>> = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build(HttpConnector::new());
 
-    let endpoints: Vec<Arc<Endpoint>> = config.cluster.iter()
-        .flat_map(|(_, addrs)| addrs.iter())
-        .map(|authority| Arc::new(Endpoint::new(Authority::from_str(authority).expect("valid authority"))))
-        .collect();
-    let cluster = Arc::new(Cluster::new(
-            client.clone(),
-            endpoints,
-    ));
-    cluster.clone().spawn_active_health();
+    let config_txt = reqwest::get("http://127.0.0.1:13000/config").await?;
+    let cfg = config::ProxyConfig::from_content(&config_txt.text().await.unwrap()).await?;
+    let mut instance = start_instance(tls_acceptor.clone(), client.clone(), cfg.clone())?;
 
-    let secret: [u8; 32] = *b"abcdabcdabcdabcdabcdabcdabcdabcd";
-    let mut ring = hash::ring::HashRing::new(secret);
-    ring.build_mp(
-        cluster.endpoints
-        .iter()
-        .enumerate()
-        .map(|(i, e)| (e.authority.as_str(), i))
-    );
-    let ring = Arc::new(ring);
-
-    let config_clone = config.clone();
-    let cluster_clone = cluster.clone();
-    let admin_handle = tokio::spawn({
-        let admin_listener = tokio::net::TcpListener::bind("0.0.0.0:15000").await?;
-
-        run_graceful(admin_listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
-            let io = TokioIo::new(stream);
-            let svc = tower::service_fn({
-                let cluster_clone = cluster_clone.clone();
-                let config_clone = config_clone.clone();
-                move |r: Request<Incoming>| {
-                    admin_handler(r, cluster_clone.clone(), config_clone.clone())
-                }
-            });
-            let svc = TowerToHyperService::new(svc);
-            let fut = graceful.watch(http1::Builder::new().serve_connection(io, svc));
-            tasks.spawn(async move {
-                if let Err(err) = fut.await {
-                    if let Some(e) = err.source() {
-                        warn!("Error serving admin connection: {}", e);
-                    } else {
-                        warn!("Error serving admin connection: {}", err);
+    let (tx, mut rx) = tokio::sync::watch::channel(cfg);
+    tokio::spawn(async move {
+        loop {
+            let response = reqwest::get("http://127.0.0.1:13000/poll_config").await;
+            match response {
+                Ok(resp) => { 
+                    info!("received new config from admin server: {:?}", resp);
+                    match resp.status().is_success() {
+                        true => {},
+                        false => {
+                            warn!("Config poll returned non-success status: {}", resp.status());
+                            continue;
+                        }
                     }
+                    let txt = match resp.text().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            warn!("Failed to read config text: {}", e);
+                            continue;
+                        }
+                    };
+                    let config = match config::ProxyConfig::from_content(&txt).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!("Failed to parse config: {}", e);
+                            continue;
+                        }
+                    };
+                    tx.send(config).unwrap();
                 }
-            });
-            ControlFlow::Continue(())
-        })
+                Err(e) => {
+                    warn!("Config poll error: {}", e);
+                }
+            }
+        }
     });
 
-    let cluster_clone = cluster.clone();
-    let client_clone = client.clone();
-    let route_timeout = config.route_timeout.clone();
-    let ring_clone = ring.clone();
-    let strat = config.strategy.clone();
-    run_graceful(listener, async move |(stream, _), tasks: &mut JoinSet<()>, graceful: &GracefulShutdown| {
-        let stream = match tls_acceptor.accept(stream).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("TLS accept error: {}", e);
-                return ControlFlow::Continue(());
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("Main Received Ctrl-C, shutting down");
+                instance.request_shutdown();
+                instance.join_with_deadline(std::time::Duration::from_secs(15)).await;
+                break;
             }
-        };
-        let io = TokioIo::new(stream);
+            Ok(_) = rx.changed() => {
+                let new_config = rx.borrow().clone();
+                info!("Applying new config: {:?}", new_config);
 
-        let svc = tower::service_fn({
-            let client_clone = client_clone.clone();
-            let cluster_clone = cluster_clone.clone();
-            let ring_clone = ring_clone.clone();
-            let strat = strat.clone();
-            move |r: Request<Incoming>| {
-                forward(
-                    r, 
-                    client_clone.clone(),
-                    cluster_clone.clone(),
-                    strat.clone(),
-                    Some(ring_clone.clone())
-                )
+                instance.request_shutdown();
+                instance.join_with_deadline(std::time::Duration::from_secs(15)).await;
+                instance = start_instance(tls_acceptor.clone(), client.clone(), new_config.clone())?;
             }
-        });
-        let svc = ServiceBuilder::new()
-            .layer(ConcurrencyLimitLayer::new(512))
-            .layer(BufferLayer::new(512))
-            .layer(router::PerRouteTimeoutLayer::new(
-                    route_timeout.clone().iter()
-                    .map(|(k, v)| (k.clone(), std::time::Duration::from_millis(*v)))
-                    .collect(),
-                    std::time::Duration::from_secs(3),
-            ))
-            .layer(TimeoutLayer::new(std::time::Duration::from_secs(10)))
-            .service(svc);
-        let svc = TowerToHyperService::new(svc);
-        let fut = graceful.watch(http1::Builder::new().serve_connection(io, svc));
-        tasks.spawn(async move {
-            if let Err(err) = fut.await {
-                if let Some(e) = err.source() {
-                    warn!("Error serving connection: {}", e);
-                } else {
-                    warn!("Error serving connection: {}", err);
-                }
-            }
-        });
-        ControlFlow::Continue(())
-    }).await?;
-
-    match try_join!(admin_handle) {
-        Ok((Ok(()),)) => { info!("Admin server exited"); },
-        Ok((Err(e),)) => warn!("Admin server error: {}", e),
-        Err(e) => warn!("Admin server join error: {}", e),
+        }
     }
 
     // shutdown_tracing(p);

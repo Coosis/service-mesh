@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, pin::pin};
+use std::net::SocketAddr;
 use std::ops::ControlFlow;
 use hyper_util::server::graceful::GracefulShutdown;
 use tokio::{net::{TcpListener, TcpStream}, task::JoinSet};
@@ -9,24 +9,24 @@ use crate::Result;
 /// - tasks: A JoinSet to spawn tasks into, drained on shutdown
 pub async fn run_graceful(
     listener: TcpListener,
-    // mut tasks: JoinSet<()>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     lo: impl AsyncFn((TcpStream, SocketAddr), &mut JoinSet<()>, &GracefulShutdown) -> ControlFlow<(), ()>,
 ) -> Result<()> {
     let graceful = GracefulShutdown::new();
     let mut tasks = JoinSet::<()>::new();
-    let mut sig_int = pin!(tokio::signal::ctrl_c());
 
     loop {
         tokio::select! {
+            biased;
+            _ = async {
+                if *shutdown_rx.borrow() { return; }
+                let _ = shutdown_rx.changed().await;
+            } => { break; }
             res = listener.accept() => {
                 match lo(res?, &mut tasks, &graceful).await {
                     ControlFlow::Continue(()) => {}
                     ControlFlow::Break(()) => break,
                 }
-            }
-            _ = &mut sig_int => {
-                debug!("Received SIGINT, shutting down...");
-                break;
             }
         }
     }
