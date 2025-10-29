@@ -3,8 +3,6 @@ use std::sync::{
     Mutex,
 };
 
-use tracing::warn;
-
 #[derive(Clone)]
 pub struct CircuitConfig {
     pub window_ms: u64,

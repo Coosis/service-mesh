@@ -13,14 +13,14 @@ use opentelemetry::{global, Context, KeyValue};
 use opentelemetry_http::{HeaderExtractor, HeaderInjector};
 use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
-
-use opentelemetry::trace::{Span as OtelSpan, SpanKind, Status, TraceContextExt, Tracer};
+use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
 
 use crate::instance::start_instance;
 use crate::tel::otel::{self, init_tracer_exporter, init_tracer_provider, init_tracing_and_propagation};
-use side_car_proxy::LoadBalanceStrategy;
-use side_car_proxy::error;
-use side_car_proxy::config;
+use mesh_core::config;
+use mesh_core::strategy::LoadBalanceStrategy;
+type ProxyConfig = config::ProxyConfig<crate::error::ProxyError>;
+// use side_car_proxy::config;
 
 mod util;
 mod tel;
@@ -32,6 +32,7 @@ mod tls;
 mod hash;
 mod circuit_breaker;
 mod instance;
+mod error;
 
 /// main forward utility. first time, we pick an endpoint by either:
 /// 1. p2c
@@ -222,7 +223,8 @@ type Result<T> = std::result::Result<T, error::ProxyError>;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        // .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .with_span_events(FmtSpan::CLOSE)
         .with_target(true)
         .init();

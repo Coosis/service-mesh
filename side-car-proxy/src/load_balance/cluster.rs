@@ -1,9 +1,9 @@
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
 use http::Request;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, Limited};
-use hyper::body::{Body, Bytes, Incoming};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty};
+use hyper::body::Bytes;
 use hyper_util::client::legacy::connect::HttpConnector;
-use tracing::debug;
+use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+use tracing::{info, warn};
 
 use crate::error::ProxyError;
 
@@ -47,7 +47,7 @@ impl Cluster {
     pub fn healthy_endpoints(&self) -> impl Iterator<Item = &Arc<Endpoint>> {
         self.endpoints.iter()
             .filter(move |e| {
-                debug!("endpoint {} healthy={}", e.authority, e.healthy.load(std::sync::atomic::Ordering::Relaxed));
+                info!("endpoint {} healthy={}", e.authority, e.healthy.load(std::sync::atomic::Ordering::Relaxed));
                 e.healthy.load(std::sync::atomic::Ordering::Relaxed)
             })
     }
@@ -65,14 +65,12 @@ impl Cluster {
                     tokio::spawn(async move {
                         let healthy = cluster.check_health(&ep).await;
                         if healthy {
-                            debug!("Health check success for {}", ep.authority);
-                            ep.healthy.store(true, Ordering::Relaxed);
-                            ep.last_eject_ms.store(0, Ordering::Relaxed);
-                            ep.latency.reset();
-                            ep.consec_fail.store(0, Ordering::Relaxed);
+                            info!("Health check success for {}", ep.authority);
                         } else {
-                            debug!("Health check failed for {}", ep.authority);
-                            cluster.begin_cooldown(&ep);
+                            if !cluster.is_in_cooldown(&ep, cluster.now_ms()) {
+                                warn!("Health check failed for {}", ep.authority);
+                                cluster.begin_cooldown(&ep);
+                            }
                         }
                     });
                 }
@@ -82,7 +80,7 @@ impl Cluster {
 
     async fn check_health(&self, ep: &Arc<Endpoint>) -> bool {
         if self.is_in_cooldown(ep, self.now_ms()) {
-            debug!("Skipping health check for {} due to cooldown", ep.authority);
+            info!("Skipping health check for {} due to cooldown", ep.authority);
             return false;
         }
 
@@ -107,16 +105,17 @@ impl Cluster {
         match res {
             Ok(Ok(resp)) => {
                 if !resp.status().is_success() {
-                    debug!("Health check non-200 status for {}: {}", ep.authority, resp.status());
+                    warn!("Health check non-200 status for {}: {}", ep.authority, resp.status());
                     return false;
                 }
                 ep.healthy.store(true, Ordering::Relaxed);
+                ep.last_eject_ms.store(0, Ordering::Relaxed);
                 ep.consec_fail.store(0, Ordering::Relaxed);
                 ep.latency.reset();
                 true
             }
             _ => {
-                debug!("Health check request timeout for {}", ep.authority);
+                warn!("Health check request timeout for {}", ep.authority);
                 false
             }
         }

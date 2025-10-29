@@ -1,20 +1,20 @@
+use http::uri::Authority;
+use http_body_util::combinators::BoxBody;
+use hyper::{body::Incoming, server::conn::http1, Request};
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioIo;
+use hyper_util::server::graceful::GracefulShutdown;
+use hyper_util::service::TowerToHyperService;
+use opentelemetry_http::Bytes;
 use std::error::Error;
 use std::ops::ControlFlow;
 use std::str::FromStr;
 use std::sync::Arc;
-use hyper_util::server::graceful::GracefulShutdown;
-use http::uri::Authority;
-use http_body_util::combinators::BoxBody;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioIo;
-use hyper_util::service::TowerToHyperService;
-use opentelemetry_http::Bytes;
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tracing::warn;
-use hyper::{body::Incoming, server::conn::http1, Request};
 
 use crate::admin::admin_handler;
 use crate::graceful::run_graceful;
@@ -63,7 +63,7 @@ impl Instance {
 pub fn start_instance(
     tls_acceptor: tokio_rustls::TlsAcceptor,
     client: Client<HttpConnector, BoxBody<Bytes, crate::error::ProxyError>>,
-    cfg: crate::config::ProxyConfig,
+    cfg: crate::ProxyConfig,
 ) ->crate::Result<Instance> {
     let (shutdown, rx) = Shutdown::new();
     let rx_admin = rx.clone();

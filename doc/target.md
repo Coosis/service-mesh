@@ -9,7 +9,7 @@
 [X] Outlier ejection (protects backends when they degrade)
 [X] Per-route timeouts (prevent request pile-ups)
 [ ] Admin port (e.g., :15000) exposing /metrics, /ready, /config
-[X] Tracing propagation (W3C traceparent) before full OTEL
+[X] OTEL support
 [X] Graceful drain on shutdown (stop accepting, finish in-flight)
 [X] Consistent hashing for sticky sessions
 [ ] Request shadowing/mirroring (copy a % to canary)

@@ -1,13 +1,21 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::extract::State;
 use axum::{http::StatusCode, routing::get, Router};
 use futures_util::stream;
 use hyper::header;
 use hyper::body::Bytes;
 use axum_extra::extract::CookieJar;
 use tracing::info;
+use tokio::sync::Mutex;
+
+struct AppState {
+    on: bool,
+    port: String,
+}
 
 #[tokio::main]
 async fn main() {
@@ -17,6 +25,7 @@ async fn main() {
     assert!(args.len() == 2, "Usage: {} <port>", args[0]);
     let port = &args[1];
 
+    let state = Arc::new(Mutex::new(AppState { on: true, port: port.clone() }));
     let app = Router::new()
         .route("/", get({
             let port = port.clone();
@@ -43,16 +52,7 @@ async fn main() {
                 }
             }
         }))
-        .route("/healthz", get({
-            let port = port.clone();
-            || async move {
-                if port == "8314" || port == "8315" {
-                    (StatusCode::OK, "Healthy")
-                } else {
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")
-                }
-            }
-        }))
+        .route("/healthz", get(healthz))
         .route("/sleep", get(|| async {
             let s = stream::once(async {
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -67,9 +67,31 @@ async fn main() {
                 body,
             )
         }))
-        .route("/bad", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Bad") }));
+        .route("/bad", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Bad") }))
+        .route("/flip", get(|State(state): State<Arc<Mutex<AppState>>>| async move {
+            let mut state = state.lock().await;
+            state.on = !state.on;
+            if state.on {
+                (StatusCode::OK, "Flipped to ON")
+            } else {
+                (StatusCode::OK, "Flipped to OFF")
+            }
+        }))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
     info!("Listening on {}", port);
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn healthz(State(state): State<Arc<Mutex<AppState>>>) -> (StatusCode, &'static str) {
+    let state = state.lock().await;
+    if !state.on {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy");
+    }
+    if state.port == "8314" || state.port == "8315" {
+        (StatusCode::OK, "Healthy")
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")
+    }
 }

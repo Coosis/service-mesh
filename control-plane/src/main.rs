@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use side_car_proxy::config::ProxyConfig;
-use side_car_proxy::config;
+// use side_car_proxy::config::ProxyConfig;
+// use side_car_proxy::config;
+// use mesh_core::config;
 
 use axum::{
-    body::Bytes, extract::State, routing::{get, post}, Router
+    body::Bytes, extract::State, http::StatusCode, routing::{get, post}, Router
 };
 
 mod error;
@@ -39,19 +40,19 @@ async fn main() {
 
 async fn poll_config(
     State(s): State<SharedState>,
-) -> Result<Bytes> {
+) -> (StatusCode, Result<Bytes>) {
     let mut rx = {
         let s = s.read().await;
         s.config_tx.subscribe()
     };
     if let Ok(Ok(config)) = tokio::time::timeout(
-        std::time::Duration::from_millis(3000),
+        std::time::Duration::from_millis(20000),
         rx.recv(),
     ).await
     {
-        return Ok(config);
+        return (StatusCode::OK, Ok(config));
     }
-    return Err(error::Error::Timeout);
+    return (StatusCode::REQUEST_TIMEOUT, Err(error::Error::Timeout));
 }
 
 async fn config(

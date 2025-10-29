@@ -3,9 +3,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Config error: {0}")]
-    ConfigError(String),
-
     #[error("Timeout error")]
     Timeout,
 

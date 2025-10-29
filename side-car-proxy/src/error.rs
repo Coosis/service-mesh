@@ -31,9 +31,6 @@ pub enum ProxyError {
     #[error("Hyper client error: {0}")]
     LegacyClientError(#[from] hyper_util::client::legacy::Error),
 
-    #[error("Failed building config: {0}")]
-    ConfigError(String),
-
     #[error("Failed to parse config: {0}")]
     ConfigParseError(#[from] toml::de::Error),
 

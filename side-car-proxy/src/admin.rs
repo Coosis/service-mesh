@@ -5,7 +5,8 @@ use http::{Request, Response};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 
-use crate::{circuit_breaker::BreakerState, config::ProxyConfig, load_balance::Cluster};
+use crate::{circuit_breaker::BreakerState, load_balance::Cluster};
+use crate::ProxyConfig;
 
 fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")

@@ -5,7 +5,7 @@ fn blake3_64_unkeyed(bytes: &[u8]) -> u64 {
 
 // Keyed variant (protects against chosen-key steering by clients):
 fn blake3_64_keyed(bytes: &[u8], key32: [u8; 32]) -> u64 {
-    let mut hasher = blake3::keyed_hash(&key32, bytes);
+    let hasher = blake3::keyed_hash(&key32, bytes);
     u64::from_le_bytes(hasher.as_bytes()[0..8].try_into().unwrap())
 }
 
