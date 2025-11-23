@@ -205,6 +205,7 @@ pub async fn forward(
         let body = timed_body
             .map_err(|e| {
                 error::ProxyError::SomeError(format!("Response body error: {}", e))
+                Infallible::from(())
             })
             .boxed();
         let proxied = Response::from_parts(parts, body);

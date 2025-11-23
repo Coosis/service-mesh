@@ -11,6 +11,7 @@ use std::error::Error;
 use std::ops::ControlFlow;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tower::{buffer::BufferLayer, limit::ConcurrencyLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
@@ -22,6 +23,7 @@ use crate::admin::admin_handler;
 use crate::forwarder::forward;
 use crate::forwarder::forward_mesh;
 use crate::graceful::run_graceful;
+use crate::layer::path::{fragments_from_str, PathFragment, PathFragments};
 use crate::{hash, tls};
 use crate::layer::{AclLayer, ErrorToHttpLayer};
 use crate::layer::PerRouteTimeoutLayer;
@@ -135,12 +137,21 @@ pub fn start_instance(
             })
         );
 
+        let route_timeout_clone = cfg.route_timeout.clone();
         let svc = tower::service_fn(
             move |r: Request<Incoming>| {
+                let rules: Vec<(PathFragments, Duration)> = route_timeout_clone.clone().iter()
+                    .map(|(k, v)| (k.clone(), Duration::from_millis(*v)))
+                    .map(|(k, v)| (fragments_from_str(&k), v))
+                    .collect();
                 forward(
                     r, 
                     client.clone(),
                     cluster.clone(),
+
+                    rules.clone(), // route timeouts
+                    10000, // default timeout ms if none matched
+
                     cfg.strategy.clone(),
                     Some(ring.clone())
                 )

@@ -2,24 +2,33 @@ use http::Request;
 use http::{Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
-use opentelemetry_http::Bytes;
+use hyper::body::{Body, Bytes};
 use pin_project_lite::pin_project;
 use std::io;
 use std::{convert::Infallible, future::Future, pin::Pin, task::Poll};
 use tower::{BoxError, Layer, Service};
 
+// HttpService Trait snippet:
+//
+// pub trait HttpService<ReqBody>: Sealed<ReqBody> {
+//     type ResBody: Body;
+//     type Error: Into<Box<dyn StdError + Send + Sync>>;
+//     type Future: Future<Output = Result<Response<Self::ResBody>, Self::Error>>;
+// }
+
 pin_project! {
-    pub struct ErrorToHttpFuture<F, E> {
+    pub struct ErrorToHttpFuture<F, E, B> {
         #[pin]
         inner: F,
-        _marker: std::marker::PhantomData<E>,
+        _marker: std::marker::PhantomData<(E, B)>,
     }
 }
 
-impl<F, E, SE> Future for ErrorToHttpFuture<F, E>
+impl<F, E, SE, ResBody> Future for ErrorToHttpFuture<F, E, ResBody>
 where
-    F: Future<Output = Result<Response<BoxBody<Bytes, E>>, SE>>,
+    F: Future<Output = Result<Response<ResBody>, SE>>,
     SE: Into<BoxError>,
+    ResBody: Body<Data = hyper::body::Bytes, Error = E> + Send + Sync + 'static,
 {
     type Output = Result<Response<BoxBody<Bytes, E>>, Infallible>;
 
@@ -27,7 +36,7 @@ where
         let mut this = self.project();
         match this.inner.as_mut().poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(resp)) => Poll::Ready(Ok(resp)),
+            Poll::Ready(Ok(resp)) => Poll::Ready(Ok(resp.map(|body| body.boxed()))),
             Poll::Ready(Err(err)) => {
                 let resp = map_error_to_response::<E>(err.into());
                 Poll::Ready(Ok(resp))
@@ -40,8 +49,11 @@ fn map_error_to_response<E>(err: BoxError) -> Response<BoxBody<Bytes, E>> {
     if let Some(io_err) = err.downcast_ref::<io::Error>() {
         if io_err.kind() == io::ErrorKind::PermissionDenied {
             return simple_body::<E>(StatusCode::FORBIDDEN, "Access Denied");
+        } else if io_err.kind() == io::ErrorKind::TimedOut {
+            return simple_body::<E>(StatusCode::REQUEST_TIMEOUT, "Timeout");
         }
     }
+
     simple_body::<E>(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
 }
 
@@ -72,17 +84,18 @@ impl<S> ErrorToHttp<S> {
     }
 }
 
-impl<S, B, E, SE> Service<Request<B>> for ErrorToHttp<S>
+impl<S, ReqBody, ResBody, E, SE> Service<Request<ReqBody>> for ErrorToHttp<S>
 where
-    S: Service<Request<B>, Response = Response<BoxBody<Bytes, E>>, Error = SE> + Clone + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>, Error = SE> + Clone + Send + 'static,
     S::Future: Send + 'static,
     SE: Into<BoxError> + Send + 'static,
     E: Send + 'static,
-    B: Send + 'static,
+    ReqBody: Send + 'static,
+    ResBody: Body<Data = Bytes, Error = E> + Send + Sync + 'static,
 {
     type Response = Response<BoxBody<Bytes, E>>;
     type Error = Infallible;
-    type Future = ErrorToHttpFuture<S::Future, E>;
+    type Future = ErrorToHttpFuture<S::Future, E, ResBody>;
 
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self.inner.poll_ready(cx) {
@@ -92,7 +105,7 @@ where
         }
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         ErrorToHttpFuture { inner: self.inner.call(req), _marker: std::marker::PhantomData }
     }
 }

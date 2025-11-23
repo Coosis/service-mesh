@@ -42,7 +42,7 @@ tls_client_key = "certs/clients/service-a.cluster.local/service-a.cluster.local.
 someserviceendpoint = ["localhost:8314"]
 
 [config.service-a.acl]
-default = "deny" # allow/deny
+default = "allow" # allow/deny
 
 [[config.service-a.acl.rules]]
 listener = "mesh" # mesh/ingress
