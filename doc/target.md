@@ -15,12 +15,13 @@
 [ ] Request shadowing/mirroring (copy a % to canary)
 [X] TLS termination
 ## Control Plane
-[ ] Access control list
-[ ] mTLS
-[ ] Routing rules to Side Cars
+[X] Access control list
+[X] mTLS
+[X] Routing rules to Side Cars
 [ ] Telemetry configuration
 [ ] Service discovery source (Kubernetes Endpoints/EndpointSlice, Consul, or etcd prefix). The CP watches it and pushes instance lists to sidecars.
-[ ] Config distribution model: pull (sidecars poll CP) or push (server-streaming). Aim for server-streaming gRPC (xDS-style) but start with polling.
+[ ] Config distribution model: pull (sidecars poll CP) or push (server-streaming). 
+Aim for server-streaming gRPC (xDS-style) but start with polling.
 [ ] Identity: issue short-lived certs (SPIFFE-like IDs) from a simple CA; rotate automatically.
 [ ] Rollout policies: weighted routing (canary 10/90), header-based A/B, failover.
 [ ] Policy evaluation order: authZ/ACL → routing → retries/timeouts → telemetry.

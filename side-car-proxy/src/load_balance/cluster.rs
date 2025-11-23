@@ -3,7 +3,7 @@ use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::body::Bytes;
 use hyper_util::client::legacy::connect::HttpConnector;
 use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::ProxyError;
 
@@ -65,10 +65,10 @@ impl Cluster {
                     tokio::spawn(async move {
                         let healthy = cluster.check_health(&ep).await;
                         if healthy {
-                            info!("Health check success for {}", ep.authority);
+                            debug!(target: "healthcheck", "Health check success for {}", ep.authority);
                         } else {
                             if !cluster.is_in_cooldown(&ep, cluster.now_ms()) {
-                                warn!("Health check failed for {}", ep.authority);
+                                warn!(target: "healthcheck", "Health check failed for {}", ep.authority);
                                 cluster.begin_cooldown(&ep);
                             }
                         }
@@ -80,7 +80,7 @@ impl Cluster {
 
     async fn check_health(&self, ep: &Arc<Endpoint>) -> bool {
         if self.is_in_cooldown(ep, self.now_ms()) {
-            info!("Skipping health check for {} due to cooldown", ep.authority);
+            info!(target: "healthcheck", "Skipping health check for {} due to cooldown", ep.authority);
             return false;
         }
 
@@ -105,7 +105,7 @@ impl Cluster {
         match res {
             Ok(Ok(resp)) => {
                 if !resp.status().is_success() {
-                    warn!("Health check non-200 status for {}: {}", ep.authority, resp.status());
+                    warn!(target: "healthcheck", "Health check non-200 status for {}: {}", ep.authority, resp.status());
                     return false;
                 }
                 ep.healthy.store(true, Ordering::Relaxed);
@@ -115,7 +115,7 @@ impl Cluster {
                 true
             }
             _ => {
-                warn!("Health check request timeout for {}", ep.authority);
+                warn!(target: "healthcheck", "Health check request timeout for {}", ep.authority);
                 false
             }
         }

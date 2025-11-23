@@ -3,13 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::routing::any;
 use axum::{http::StatusCode, routing::get, Router};
 use futures_util::stream;
 use hyper::header;
 use hyper::body::Bytes;
 use axum_extra::extract::CookieJar;
-use tracing::info;
+use tracing::{info, debug};
 use tokio::sync::Mutex;
 
 struct AppState {
@@ -25,32 +26,33 @@ async fn main() {
     assert!(args.len() == 2, "Usage: {} <port>", args[0]);
     let port = &args[1];
 
+    let letthrough: Vec<String> = vec!["8314".into(), "8315".into(), "8317".into()];
+
     let state = Arc::new(Mutex::new(AppState { on: true, port: port.clone() }));
     let app = Router::new()
         .route("/", get({
             let port = port.clone();
             async move |headers: axum::http::HeaderMap, jar: CookieJar| {
                 info!("Headers: {:?}", headers);
-                if port == "8314" {
+                if letthrough.contains(&port) {
                     if jar.get("x-client-id").is_some() {
+                        debug!("x-client-id found!");
                         return (StatusCode::OK, jar, format!("Hello from port {port}\n"));
                     }
-                    let uuid = uuid::Uuid::new_v4().to_string();
-                    let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", uuid));
-                    // debug!("{:?}", )
-                    (StatusCode::OK, jar, format!("Hello from port {port}\n"))
-                } else if port == "8315" {
-                    if jar.get("x-client-id").is_some() {
-                        return (StatusCode::OK, jar, format!("Hello from port {port}\n"));
-                    }
+                    debug!("x-client-id not found, setting...");
                     let uuid = uuid::Uuid::new_v4().to_string();
                     let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", uuid));
                     (StatusCode::OK, jar, format!("Hello from port {port}\n"))
-                } else {
+                }
+                else {
+                    debug!("This port does not let through");
                     let jar = jar.add(axum_extra::extract::cookie::Cookie::new("x-client-id", "hihi"));
                     (StatusCode::INTERNAL_SERVER_ERROR, jar, format!("Error!"))
                 }
             }
+        }))
+        .route("/internal/ok", any(|| async {
+            (StatusCode::OK, "Internal Endpoint")
         }))
         .route("/healthz", get(healthz))
         .route("/sleep", get(|| async {
@@ -77,6 +79,27 @@ async fn main() {
                 (StatusCode::OK, "Flipped to OFF")
             }
         }))
+        .route("/call/{cluster}/{domain}/{path}", get(|Path((cluster, domain, path)): Path<(String, String, String)>| async move {
+            info!("Calling domain: {} from cluster: {}", domain, cluster);
+            let client = reqwest::ClientBuilder::new()
+                .danger_accept_invalid_certs(true)
+                .build().unwrap();
+            let res = client.get(format!("http://{}/{}", cluster, path))
+                .body("")
+                .header("HOST", &domain)
+                .send()
+                .await;
+            println!("Response from cluster {}: {:?}", cluster, res);
+            match res {
+                Ok(r) => {
+                    (StatusCode::OK, r.text().await.unwrap_or_else(|_| "Failed to read response".to_string()))
+                },
+                Err(e) => {
+                    println!("Error calling cluster {}: {}", cluster, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error calling domain: {}", domain));
+                }
+            }
+        }))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
@@ -89,7 +112,7 @@ async fn healthz(State(state): State<Arc<Mutex<AppState>>>) -> (StatusCode, &'st
     if !state.on {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy");
     }
-    if state.port == "8314" || state.port == "8315" {
+    if state.port == "8314" || state.port == "8317" {
         (StatusCode::OK, "Healthy")
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, "Unhealthy")

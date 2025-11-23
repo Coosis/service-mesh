@@ -1,12 +1,82 @@
-# RoundRobin, P2C
-strategy = "RoundRobin"
+[config.service-a]
+strategy = "RoundRobin"        # RoundRobin/P2C
+ingress_bind = "0.0.0.0:8333"  # used for client requests
+admin_bind = "0.0.0.0:15000"   # used for admin tasks like stats, config dump, etc.
+root_ca = "rootCA.crt"
 
-# per-route timeout, supports wildcard * in path, in milliseconds
-[route_timeout]
+[config.service-a.tls]
+MTLS = [
+    "certs/service-a.cluster.local/service-a.cluster.local.fullchain.pem",
+    "certs/service-a.cluster.local/service-a.cluster.local.key",
+    "[::]:8533", # used for service mesh ingress requests
+]
+# Uncomment to only use tls for client ingress traffic, no mtls listener for mesh ingress
+# Plain = [
+#    "certs/service-a.cluster.local/service-a.cluster.local.fullchain.pem"
+#    "certs/service-a.cluster.local/service-a.cluster.local.key"
+# ]
+# Or uncomment to use no tls at all
+# remember to also comment out the `[tls]` section above
+# tls = "none"
+
+[config.service-a.egress]
+mesh_egress_bind = "127.0.0.1:8433" # used for service mesh egress requests
+# note: mesh_egress_bind should generally be localhost or loopback interface, 
+# otherwise sidecar cannot distinguish between a client ingress request and 
+# a mesh egress request from a cluster service behind the proxy.
+# by setting it to localhost, we ensure that only services behind the proxy
+# can use the mesh egress port, 
+# whereas clients from outside the host cannot access the mesh directly.
+tls_client_crt = "certs/clients/service-a.cluster.local/service-a.cluster.local.fullchain.pem"
+tls_client_key = "certs/clients/service-a.cluster.local/service-a.cluster.local.key"
+
+
+[config.service-a.route_timeout]
+# per-route timeout, supports wildcard * for single path component in path, in milliseconds
 "/hello" = 3000
 "/*/heelo" = 301
 
-[cluster]
+[config.service-a.cluster]
 # someserviceendpoint = ["localhost:8314", "localhost:8315", "localhost:8316", "localhost:8317"]
 # someserviceendpoint = ["localhost:8317"]
 someserviceendpoint = ["localhost:8314"]
+
+[config.service-a.acl]
+default = "deny" # allow/deny
+
+[[config.service-a.acl.rules]]
+listener = "mesh" # mesh/ingress
+path = "/internal/*"
+strategy = "allow"
+
+[[config.service-a.acl.rules]]
+listener = "ingress"
+path = "/hello"
+strategy = "deny"
+
+
+
+
+
+[config.service-b]
+strategy = "P2C"
+ingress_bind = "0.0.0.0:8334"
+admin_bind = "0.0.0.0:15001"
+[config.service-b.tls]
+MTLS = [
+	"certs/service-b.cluster.local/service-b.cluster.local.fullchain.pem",
+	"certs/service-b.cluster.local/service-b.cluster.local.key",
+    "[::]:8534",
+]
+
+[config.service-b.egress]
+mesh_egress_bind = "127.0.0.1:8435"
+tls_client_crt = "certs/clients/service-b.cluster.local/service-b.cluster.local.fullchain.pem"
+tls_client_key = "certs/clients/service-b.cluster.local/service-b.cluster.local.key"
+
+[config.service-b.cluster]
+someserviceendpoint = ["localhost:8317"]
+[config.service-b.route_timeout]
+[config.service-b.acl]
+default = "allow"
+rules = []

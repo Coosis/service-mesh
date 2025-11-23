@@ -1,12 +1,11 @@
-use hyper::StatusCode;
-use std::{convert::Infallible, sync::{atomic::Ordering, Arc}};
-
 use http::{Request, Response};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use hyper::StatusCode;
 use hyper::body::{Bytes, Incoming};
+use std::{convert::Infallible, sync::{atomic::Ordering, Arc}};
 
 use crate::{circuit_breaker::BreakerState, load_balance::Cluster};
-use crate::ProxyConfig;
+use mesh_core::config::ProxyConfig;
 
 fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
@@ -45,7 +44,8 @@ pub async fn admin_handler(
             Ok(resp)
         }
         "/config" => {
-            let json = config.to_json().unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
+            let json = serde_json::to_string(&config)
+                .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
             let body = Full::new(Bytes::from(json))
                 .map_err(|e| crate::error::ProxyError::SomeError(e.to_string()))
                 .boxed();

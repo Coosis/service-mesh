@@ -42,4 +42,10 @@ pub enum ProxyError {
 
     #[error("JSON error: {0}")]
     JSONError(#[from] serde_json::Error),
+
+    #[error("")]
+    PemError(#[from] rustls_pki_types::pem::Error),
+
+    #[error("tls error")]
+    TlsError(#[from] tokio_rustls::rustls::Error),
 }

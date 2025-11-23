@@ -5,17 +5,17 @@ use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use crate::{error::ProxyError, Result};
 
 pub fn get_server_config(
-    fullchain: impl AsRef<std::path::Path>,
+    cert: impl AsRef<std::path::Path>,
     key: impl AsRef<std::path::Path>,
-) ->Result<Arc<ServerConfig>> {
-    if !fullchain.as_ref().exists() {
-        return Err(ProxyError::FileNotFound("fullchain not found".to_string()));
+) -> Result<Arc<ServerConfig>> {
+    if !cert.as_ref().exists() {
+        return Err(ProxyError::FileNotFound("cert not found".to_string()));
     }
     if !key.as_ref().exists() {
         return Err(ProxyError::FileNotFound("key not found".to_string()));
     }
     let certs: Vec<CertificateDer<'static>> = 
-        CertificateDer::pem_file_iter(fullchain)
+        CertificateDer::pem_file_iter(cert)
         .map_err(|_| ProxyError::CertOpenError)?
         .map(|c| c.map_err(|_| ProxyError::CertMalformedError))
         .filter_map(Result::ok)

@@ -7,3 +7,5 @@ prompt.sh
 *.cnf
 *.csr
 *.pem
+*.ext
+certs/

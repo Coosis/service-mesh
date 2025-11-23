@@ -1,4 +1,13 @@
+use http::request::Parts;
 use hyper::header::{CONNECTION, TE, TRANSFER_ENCODING, UPGRADE, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION};
+
+pub fn authority_from(p: &Parts) -> Option<String> {
+    let from_header = p.headers.get("HOST")
+        .and_then(|hv| hv.to_str().ok());
+    let from_authority = p.uri.authority()
+        .map(|a| a.as_str());
+    from_header.or(from_authority).map(|s| s.to_owned())
+}
 
 pub fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     let conns = headers.get_all(CONNECTION).iter()

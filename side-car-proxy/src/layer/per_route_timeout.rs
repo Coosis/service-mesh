@@ -5,40 +5,7 @@ use http::Request;
 use pin_project_lite::pin_project;
 use tower::{BoxError, Layer, Service};
 
-#[derive(Debug, Clone)]
-enum PathFragment {
-    String(String),
-    Wildcard,
-}
-type PathFragments = Vec<PathFragment>;
-fn fragments_from_str(v: &str) -> PathFragments {
-    v.split('/')
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            if s == "*" {
-                PathFragment::Wildcard
-            } else {
-                PathFragment::String(s.to_string())
-            }
-        })
-        .collect()
-}
-fn get_timeout(rules: &[(PathFragments, Duration)], path: &str, default: Duration) -> Duration {
-    let fragments = fragments_from_str(path);
-    let d = rules.iter()
-        .filter(|(rule, _)| rule.len() == fragments.len())
-        .find(|(rule, _)| {
-            rule.iter().zip(&fragments).all(|(rule_frag, path_frag)| {
-                match (rule_frag, path_frag) {
-                    (PathFragment::Wildcard, _) => true,
-                    (PathFragment::String(r), PathFragment::String(p)) => r.eq(p),
-                    _ => false,
-                }
-            })
-        })
-    .map_or(default, |(_, dur)| *dur);
-    d
-}
+use crate::layer::path::{PathFragments, fragments_from_str, get_timeout};
 
 pin_project! {
     pub struct PerRouteFuture<F> {
@@ -98,7 +65,7 @@ where S: Service<Request<B>> + Send + 'static,
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
         let path = req.uri().path();
-        let timeout = get_timeout(&self.rules, path, self.default);
+        let timeout = get_timeout((&self.rules).iter(), path, self.default);
         let fut = self.inner.call(req);
         let sleep = tokio::time::sleep(timeout);
         PerRouteFuture {
