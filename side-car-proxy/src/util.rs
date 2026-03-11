@@ -1,22 +1,31 @@
 use http::request::Parts;
-use hyper::header::{CONNECTION, TE, TRANSFER_ENCODING, UPGRADE, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION};
+use hyper::header::{
+    CONNECTION, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRANSFER_ENCODING, UPGRADE,
+};
 
 pub fn authority_from(p: &Parts) -> Option<String> {
-    let from_header = p.headers.get("HOST")
-        .and_then(|hv| hv.to_str().ok());
-    let from_authority = p.uri.authority()
-        .map(|a| a.as_str());
+    let from_header = p.headers.get("HOST").and_then(|hv| hv.to_str().ok());
+    let from_authority = p.uri.authority().map(|a| a.as_str());
     from_header.or(from_authority).map(|s| s.to_owned())
 }
 
 pub fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
-    let conns = headers.get_all(CONNECTION).iter()
+    let conns = headers
+        .get_all(CONNECTION)
+        .iter()
         .filter_map(|hv| hv.to_str().ok())
         .flat_map(|s| s.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()))
         .map(|s| s.to_owned())
         .collect::<Vec<_>>();
 
-    for h in [CONNECTION, TE, TRANSFER_ENCODING, UPGRADE, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION] {
+    for h in [
+        CONNECTION,
+        TE,
+        TRANSFER_ENCODING,
+        UPGRADE,
+        PROXY_AUTHENTICATE,
+        PROXY_AUTHORIZATION,
+    ] {
         headers.remove(h);
     }
 
@@ -38,8 +47,14 @@ mod test {
         headers.insert(TE, "trailers".parse().unwrap());
         headers.insert(TRANSFER_ENCODING, "chunked".parse().unwrap());
         headers.insert(UPGRADE, "websocket".parse().unwrap());
-        headers.insert(PROXY_AUTHENTICATE, "Basic realm=\"somehting\"".parse().unwrap());
-        headers.insert(PROXY_AUTHORIZATION, "Basic dXNlcjpwYXNzd29yZA==".parse().unwrap());
+        headers.insert(
+            PROXY_AUTHENTICATE,
+            "Basic realm=\"somehting\"".parse().unwrap(),
+        );
+        headers.insert(
+            PROXY_AUTHORIZATION,
+            "Basic dXNlcjpwYXNzd29yZA==".parse().unwrap(),
+        );
 
         strip_hop_by_hop(&mut headers);
 

@@ -2,9 +2,9 @@ use std::sync::OnceLock;
 
 use opentelemetry::global::{self, BoxedTracer};
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use opentelemetry_sdk::Resource;
 use opentelemetry_stdout::SpanExporter;
 
 type Result<T> = std::result::Result<T, crate::error::ProxyError>;

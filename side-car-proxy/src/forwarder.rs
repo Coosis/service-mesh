@@ -1,33 +1,33 @@
-use std::borrow::Cow;
-use std::convert::Infallible;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use http::header::COOKIE;
 use http::uri::PathAndQuery;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
-use hyper::header::{HeaderValue, HOST};
-use hyper::{body::Incoming, Request, Response};
-use opentelemetry::{global, Context, KeyValue};
-use opentelemetry_http::{HeaderExtractor, HeaderInjector};
-use tracing::{debug, info, warn, error};
+use hyper::header::{HOST, HeaderValue};
+use hyper::{Request, Response, body::Incoming};
 use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
+use opentelemetry::{Context, KeyValue, global};
+use opentelemetry_http::{HeaderExtractor, HeaderInjector};
+use std::borrow::Cow;
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tracing::{debug, error, info, warn};
 
-use mesh_core::strategy::LoadBalanceStrategy;
 use crate::layer::TimeoutBody;
+use crate::layer::path::{PathFragments, get_timeout};
 use crate::load_balance::{Cluster, Endpoint};
 use crate::util::authority_from;
-use crate::{hash, error, otel, util};
 use crate::{HttpClient, MtlsClient, Result};
-use crate::layer::path::{PathFragments, get_timeout};
+use crate::{error, hash, otel, util};
+use mesh_core::strategy::LoadBalanceStrategy;
 
 /// main forward utility. first time, we pick an endpoint by either:
 /// 1. p2c
 /// 2. round robin
 /// after we pick an endpoint, we route to that endpoint
 /// that specific endpoint is able to set "x-client-id" for client to opt-in sticky session
-/// 
+///
 /// next time, if "x-client-id" is present in cookie header, we use consistent hashing to pick the
 /// endpoint
 /// otherwise, repeat the above process
@@ -46,12 +46,12 @@ pub async fn forward(
     let t0 = std::time::Instant::now();
 
     let (mut parts, body) = r.into_parts();
-    let parent_ctx = global::get_text_map_propagator(|prop| {
-        prop.extract(&HeaderExtractor(&parts.headers))
-    });
+    let parent_ctx =
+        global::get_text_map_propagator(|prop| prop.extract(&HeaderExtractor(&parts.headers)));
 
     let tracer = otel::get_tracer();
-    let otel_span = tracer.span_builder(format!("{} {}", parts.method, parts.uri.path()))
+    let otel_span = tracer
+        .span_builder(format!("{} {}", parts.method, parts.uri.path()))
         .with_kind(SpanKind::Server)
         .start_with_context(tracer, &parent_ctx);
 
@@ -63,31 +63,38 @@ pub async fn forward(
         // tls term at proxy
 
         // endpoint selection
-        let sid = parts.headers.get_all(COOKIE).iter()
-            .find_map(|val| {
-                let s = val.to_str().ok()?;
-                // Cookie header format: "a=1; b=2; c=3"
-                for pair in s.split(';') {
-                    let pair = pair.trim();
-                    if let Some((k, v)) = pair.split_once('=') {
-                        if k == "x-client-id" {
-                            return Some(v.to_string());
-                        }
+        let sid = parts.headers.get_all(COOKIE).iter().find_map(|val| {
+            let s = val.to_str().ok()?;
+            // Cookie header format: "a=1; b=2; c=3"
+            for pair in s.split(';') {
+                let pair = pair.trim();
+                if let Some((k, v)) = pair.split_once('=') {
+                    if k == "x-client-id" {
+                        return Some(v.to_string());
                     }
                 }
-                None
-            });
+            }
+            None
+        });
         let ep: Arc<Endpoint>;
-        if let Some(ring) = ring && let Some(sid) = sid {
+        if let Some(ring) = ring
+            && let Some(sid) = sid
+        {
             // Prefer the sticky endpoint, but skip ejected/unhealthy ones.
             if let Some(idx) = ring.get_index_filtered(&sid, |i| {
                 cluster.endpoints[i].healthy.load(Ordering::Relaxed)
             }) {
-                info!("Routing sid={} to endpoint idx={} (sticky, healthy)", sid, idx);
+                info!(
+                    "Routing sid={} to endpoint idx={} (sticky, healthy)",
+                    sid, idx
+                );
                 ep = cluster.endpoints[idx].clone();
             } else if let Some(p2c_ep) = cluster.pick_p2c() {
                 // No healthy node along the ring path; fall back to p2c.
-                warn!("No healthy endpoints in ring walk for sid={}; falling back to p2c", sid);
+                warn!(
+                    "No healthy endpoints in ring walk for sid={}; falling back to p2c",
+                    sid
+                );
                 ep = p2c_ep;
             } else {
                 warn!("No healthy endpoints available (ring & p2c)");
@@ -96,28 +103,26 @@ pub async fn forward(
         } else {
             // ! uncommnet to use round robin instead!
             ep = match strat {
-                LoadBalanceStrategy::P2C => {
-                    match cluster.pick_p2c() {
-                        Some(ep) => ep,
-                        None => {
-                            warn!("No healthy endpoints available");
-                            return Err(error::ProxyError::NoHealthyEndpoints);
-                        }
+                LoadBalanceStrategy::P2C => match cluster.pick_p2c() {
+                    Some(ep) => ep,
+                    None => {
+                        warn!("No healthy endpoints available");
+                        return Err(error::ProxyError::NoHealthyEndpoints);
                     }
-                }
-                LoadBalanceStrategy::RoundRobin => {
-                    match cluster.pick_round_robin() {
-                        Some(ep) => ep,
-                        None => {
-                            warn!("No healthy endpoints available");
-                            return Err(error::ProxyError::NoHealthyEndpoints);
-                        }
+                },
+                LoadBalanceStrategy::RoundRobin => match cluster.pick_round_robin() {
+                    Some(ep) => ep,
+                    None => {
+                        warn!("No healthy endpoints available");
+                        return Err(error::ProxyError::NoHealthyEndpoints);
                     }
-                }
+                },
             };
         }
 
-        let path_and_query = parts.uri.path_and_query()
+        let path_and_query = parts
+            .uri
+            .path_and_query()
             .map(|pq| pq.to_string())
             .unwrap_or_else(|| "/".to_string());
         let uri = http::Uri::builder()
@@ -129,7 +134,8 @@ pub async fn forward(
 
         parts.headers.insert(
             HOST,
-            HeaderValue::from_str(&ep.authority.as_str()).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
+            HeaderValue::from_str(&ep.authority.as_str())
+                .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
         );
 
         let limit = Limited::new(body, 2 * 1024 * 1024)
@@ -152,7 +158,10 @@ pub async fn forward(
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .body(body)
                 .map_err(|e| error::ProxyError::SomeError(format!("resp build: {e}")))?;
-            warn!("Circuit breaker open for {}, rejecting request", ep.authority);
+            warn!(
+                "Circuit breaker open for {}, rejecting request",
+                ep.authority
+            );
             return Ok(resp);
         }
 
@@ -160,7 +169,8 @@ pub async fn forward(
         let t0 = std::time::Instant::now();
         let res = client.request(req).await;
         let elapsed = t0.elapsed().as_millis() as i64; // tracing
-        cx.span().set_attribute(KeyValue::new("upstream_elapsed_ms", elapsed));
+        cx.span()
+            .set_attribute(KeyValue::new("upstream_elapsed_ms", elapsed));
         let rtt_ms = t0.elapsed().as_millis() as u64; // ewma
         ep.in_flight.fetch_sub(1, Ordering::Relaxed);
 
@@ -181,7 +191,8 @@ pub async fn forward(
 
         if !ok {
             warn!("Request to {} failed", ep.authority);
-            cx.span().set_status(Status::error("Upstream request failed"));
+            cx.span()
+                .set_status(Status::error("Upstream request failed"));
         }
         // comment out to test out circuit breaker
         cluster.observe(&ep, ok, rtt_ms);
@@ -193,35 +204,35 @@ pub async fn forward(
 
         ep.breaker.record(cluster.now_ms(), ok);
 
-        cx.span().set_attribute(KeyValue::new("upstream", ep.authority.as_str().to_string()));
+        cx.span()
+            .set_attribute(KeyValue::new("upstream", ep.authority.as_str().to_string()));
         let res = res?;
         let (parts, body) = res.into_parts();
         let timeout_duration = get_timeout(
-            (&rules).into_iter(), 
+            (&rules).into_iter(),
             &path_and_query,
-            std::time::Duration::from_millis(default_timeout)
+            std::time::Duration::from_millis(default_timeout),
         );
         let timed_body = TimeoutBody::new(body, timeout_duration);
         let body = timed_body
-            .map_err(|e| {
-                error::ProxyError::SomeError(format!("Response body error: {}", e))
-            })
+            .map_err(|e| error::ProxyError::SomeError(format!("Response body error: {}", e)))
             .boxed();
         let proxied = Response::from_parts(parts, body);
         (
             Ok::<Response<BoxBody<Bytes, error::ProxyError>>, error::ProxyError>(proxied),
-            cx
+            cx,
         )
     };
 
     let elapsed = t0.elapsed().as_millis() as i64;
     debug!("Total elapsed time: {} ms", elapsed);
-    cx.span().set_attribute(KeyValue::new("elapsed_ms", elapsed));
+    cx.span()
+        .set_attribute(KeyValue::new("elapsed_ms", elapsed));
 
     res
 }
 
-/// forward for mesh services, services behind proxy send requests to proxy, 
+/// forward for mesh services, services behind proxy send requests to proxy,
 /// proxy forwards their requests inside the mesh using this `forward_mesh`
 pub async fn forward_mesh(
     r: Request<Incoming>,
@@ -230,12 +241,12 @@ pub async fn forward_mesh(
     let t0 = std::time::Instant::now();
 
     let (mut parts, body) = r.into_parts();
-    let parent_ctx = global::get_text_map_propagator(|prop| {
-        prop.extract(&HeaderExtractor(&parts.headers))
-    });
+    let parent_ctx =
+        global::get_text_map_propagator(|prop| prop.extract(&HeaderExtractor(&parts.headers)));
 
     let tracer = otel::get_tracer();
-    let otel_span = tracer.span_builder(format!("{} {}", parts.method, parts.uri.path()))
+    let otel_span = tracer
+        .span_builder(format!("{} {}", parts.method, parts.uri.path()))
         .with_kind(SpanKind::Server)
         .start_with_context(tracer, &parent_ctx);
 
@@ -248,14 +259,21 @@ pub async fn forward_mesh(
             let uri = http::Uri::builder()
                 .scheme("https")
                 .authority(dest)
-                .path_and_query(parts.uri.path_and_query().map_or(PathAndQuery::from_static("/"), |pq| pq.to_owned()))
+                .path_and_query(
+                    parts
+                        .uri
+                        .path_and_query()
+                        .map_or(PathAndQuery::from_static("/"), |pq| pq.to_owned()),
+                )
                 .build()?;
             parts.uri = uri;
             let body = body
                 .map_err(|e| error::ProxyError::SomeError(format!("Body error: {}", e)))
                 .boxed();
             error!("Forwarding mesh request to {}", &parts.uri);
-            let res = mtls_client.request(Request::from_parts(parts, body)).await?;
+            let res = mtls_client
+                .request(Request::from_parts(parts, body))
+                .await?;
             let (parts, body) = res.into_parts();
             let body = body
                 .map_err(|e| error::ProxyError::SomeError(format!("Response body error: {}", e)))
@@ -263,18 +281,25 @@ pub async fn forward_mesh(
             let proxied = Response::from_parts(parts, body);
             (
                 Ok::<Response<BoxBody<Bytes, error::ProxyError>>, error::ProxyError>(proxied),
-                cx
+                cx,
             )
         } else {
-            cx.span().set_status(Status::Error { description: Cow::from("No authority found in request") });
-            (Err(error::ProxyError::SomeError("No authority found in request".to_string())), cx)
+            cx.span().set_status(Status::Error {
+                description: Cow::from("No authority found in request"),
+            });
+            (
+                Err(error::ProxyError::SomeError(
+                    "No authority found in request".to_string(),
+                )),
+                cx,
+            )
         }
     };
 
     let elapsed = t0.elapsed().as_millis() as i64;
     debug!("Total elapsed time: {} ms", elapsed);
-    cx.span().set_attribute(KeyValue::new("elapsed_ms", elapsed));
+    cx.span()
+        .set_attribute(KeyValue::new("elapsed_ms", elapsed));
 
     res
 }
-

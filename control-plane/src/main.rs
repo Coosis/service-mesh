@@ -1,15 +1,19 @@
-use std::{collections::HashMap, sync::Arc};
 use mesh_core::config::Config;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 use axum::{
-    body::Bytes, extract::{Path, State}, http::StatusCode, routing::{get, post}, Router
+    Router,
+    body::Bytes,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post},
 };
 
 use crate::config::{from_content, to_json};
 
-mod error;
 mod config;
+mod error;
 type Result<T> = std::result::Result<T, error::Error>;
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -21,7 +25,8 @@ struct AppState {
 #[tokio::main]
 async fn main() {
     // read config
-    let config_path = std::env::var("CONFIG_PATH").unwrap_or("example/proxy_config.toml".to_string());
+    let config_path =
+        std::env::var("CONFIG_PATH").unwrap_or("example/proxy_config.toml".to_string());
     let config_file = config::from_file(&config_path).await.unwrap();
 
     // uncomment to check single service config toml format
@@ -42,7 +47,7 @@ async fn main() {
     //     .with_tls_cfg(mesh_core::config::TlsConfig::None)
     //     .with_strategy(mesh_core::strategy::LoadBalanceStrategy::RoundRobin);
     //     // .with_egress_cfg(mesh_core::config::MeshEgressConfig::new(
-    //     //         "test2.bind".into(), 
+    //     //         "test2.bind".into(),
     //     //         "test2.cert".into(),
     //     //         "test2.key".into()));
     // let config_toml_str = toml::to_string_pretty(&pconfig).unwrap_or("".to_string());
@@ -65,7 +70,9 @@ async fn main() {
         .route("/config/{svc_name}", get(config))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:13000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:13000")
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -95,27 +102,21 @@ async fn poll_config(
             rx
         }
     };
-    if let Ok(Ok(_)) = tokio::time::timeout(
-        std::time::Duration::from_millis(20000),
-        rx.changed(),
-    ).await
+    if let Ok(Ok(_)) =
+        tokio::time::timeout(std::time::Duration::from_millis(20000), rx.changed()).await
     {
         return (StatusCode::OK, Ok(rx.borrow().clone()));
     }
     return (StatusCode::REQUEST_TIMEOUT, Err(error::Error::Timeout));
 }
 
-async fn config(
-    Path(svc_name): Path<String>,
-    State(s): State<SharedState>,
-) -> Result<Bytes> {
+async fn config(Path(svc_name): Path<String>, State(s): State<SharedState>) -> Result<Bytes> {
     let s = s.read().await;
     if let Some(mp) = &s.config_mp {
-        let cfg = mp.config
+        let cfg = mp
+            .config
             .get(&svc_name)
-            .ok_or_else(|| {
-                error::Error::NoConfig
-            })?;
+            .ok_or_else(|| error::Error::NoConfig)?;
         let b = to_json(cfg)?.into();
         Ok(b)
     } else {
@@ -123,15 +124,12 @@ async fn config(
     }
 }
 
-async fn upload_config(
-    State(s): State<SharedState>,
-    body: Bytes,
-) -> Result<()> {
+async fn upload_config(State(s): State<SharedState>, body: Bytes) -> Result<()> {
     {
         let mut s = s.write().await;
         // todo: parse and validate
-        let content = std::str::from_utf8(&body)
-            .map_err(|e| error::Error::MalformedConfig(e.to_string()))?;
+        let content =
+            std::str::from_utf8(&body).map_err(|e| error::Error::MalformedConfig(e.to_string()))?;
         let cfg = from_content(content)?;
         s.config_mp = Some(cfg);
     }

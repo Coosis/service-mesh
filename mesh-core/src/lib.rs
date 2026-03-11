@@ -1,6 +1,6 @@
+pub mod acl;
 pub mod config;
 pub mod strategy;
-pub mod acl;
 
 // #[cfg(test)]
 // mod tests {

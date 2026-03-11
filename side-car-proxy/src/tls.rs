@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use rustls::ServerConfig;
-use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use std::sync::Arc;
 
-use crate::{error::ProxyError, Result};
+use crate::{Result, error::ProxyError};
 
 pub fn get_server_config(
     cert: impl AsRef<std::path::Path>,
@@ -14,17 +14,17 @@ pub fn get_server_config(
     if !key.as_ref().exists() {
         return Err(ProxyError::FileNotFound("key not found".to_string()));
     }
-    let certs: Vec<CertificateDer<'static>> = 
-        CertificateDer::pem_file_iter(cert)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert)
         .map_err(|_| ProxyError::CertOpenError)?
         .map(|c| c.map_err(|_| ProxyError::CertMalformedError))
         .filter_map(Result::ok)
         .collect();
-    let key = PrivateKeyDer::from_pem_file(key)
-        .unwrap();
+    let key = PrivateKeyDer::from_pem_file(key).unwrap();
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .map_err(|e| crate::error::ProxyError::SomeError(format!("Failed to create server config: {}", e)))?;
+        .map_err(|e| {
+            crate::error::ProxyError::SomeError(format!("Failed to create server config: {}", e))
+        })?;
     Ok(Arc::new(config))
 }

@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
     Mutex,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 #[derive(Clone)]
@@ -27,7 +27,11 @@ impl Default for CircuitConfig {
 
 #[repr(usize)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum BreakerState { Closed = 0, Open = 1, HalfOpen = 2 }
+pub enum BreakerState {
+    Closed = 0,
+    Open = 1,
+    HalfOpen = 2,
+}
 
 struct Window {
     start_ms: u64,
@@ -35,7 +39,13 @@ struct Window {
     fail: u64,
 }
 impl Window {
-    fn new(now_ms: u64) -> Self { Self { start_ms: now_ms, req: 0, fail: 0 } }
+    fn new(now_ms: u64) -> Self {
+        Self {
+            start_ms: now_ms,
+            req: 0,
+            fail: 0,
+        }
+    }
     fn rotate_if_needed(&mut self, now_ms: u64, window_ms: u64) {
         if now_ms.saturating_sub(self.start_ms) >= window_ms {
             self.start_ms = now_ms;
@@ -47,9 +57,9 @@ impl Window {
 
 pub struct CircuitBreaker {
     cfg: CircuitConfig,
-    state: AtomicUsize,        // State
-    opened_at_ms: AtomicU64,   // valid when Open
-    win: Mutex<Window>,        // Closed window (always present)
+    state: AtomicUsize,      // State
+    opened_at_ms: AtomicU64, // valid when Open
+    win: Mutex<Window>,      // Closed window (always present)
     half_open_probes: AtomicUsize,
     half_open_successes: AtomicUsize,
 }
@@ -121,7 +131,9 @@ impl CircuitBreaker {
                 let mut w = self.win.lock().unwrap();
                 w.rotate_if_needed(now_ms, self.cfg.window_ms);
                 w.req += 1;
-                if !ok { w.fail += 1; }
+                if !ok {
+                    w.fail += 1;
+                }
 
                 if w.req >= self.cfg.request_volume_threshold {
                     let ratio = (w.fail as f64) / (w.req as f64);
@@ -132,12 +144,14 @@ impl CircuitBreaker {
                     }
                 }
             }
-            BreakerState::Open => { }
+            BreakerState::Open => {}
             BreakerState::HalfOpen => {
                 if ok {
                     let succ = self.half_open_successes.fetch_add(1, Ordering::Relaxed) as u64 + 1;
                     let probes = self.half_open_probes.load(Ordering::Relaxed) as u64;
-                    if succ >= self.cfg.half_open_successes_to_close || probes >= self.cfg.half_open_max_probes {
+                    if succ >= self.cfg.half_open_successes_to_close
+                        || probes >= self.cfg.half_open_max_probes
+                    {
                         self.set_state(BreakerState::Closed, now_ms);
                         // warn!("circuit breaker closed");
                     }

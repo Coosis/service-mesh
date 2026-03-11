@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use crate::{
+    acl::{ACL, AccessStrategy},
+    strategy::LoadBalanceStrategy,
+};
 use serde::{Deserialize, Serialize};
-use crate::{acl::{AccessStrategy, ACL}, strategy::LoadBalanceStrategy};
+use std::collections::HashMap;
 
 // Control plane parses a list of ProxyConfig objects, one per proxy instance
-// when a proxy requests its configuration, it provides its instance ID and 
+// when a proxy requests its configuration, it provides its instance ID and
 // the control plane returns the corresponding ProxyConfig
 // proxy deserialize the config
 
@@ -25,11 +28,7 @@ pub struct MeshEgressConfig {
 }
 
 impl MeshEgressConfig {
-    pub fn new(
-        mesh_egress_bind: String,
-        tls_client_crt: String,
-        tls_client_key: String,
-    ) -> Self {
+    pub fn new(mesh_egress_bind: String, tls_client_crt: String, tls_client_key: String) -> Self {
         MeshEgressConfig {
             mesh_egress_bind,
             tls_client_crt,
@@ -119,9 +118,8 @@ pub struct ProxyConfig {
     pub admin_bind: String,
 
     // mental model:
-    // service_behind_proxy_a -> proxy_a's egress_bind -(mTLS)-> proxy_b's mesh_bind 
+    // service_behind_proxy_a -> proxy_a's egress_bind -(mTLS)-> proxy_b's mesh_bind
     // -> service_behind_proxy_b
-    
     pub root_ca: Option<String>,
 
     pub tls: TlsConfig,

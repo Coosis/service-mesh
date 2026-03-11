@@ -20,8 +20,9 @@ MTLS = [
 # tls = "none"
 
 [config.service-a.egress]
-mesh_egress_bind = "127.0.0.1:8433" # used for service mesh egress requests
+mesh_egress_bind = "127.0.0.1:8433"
 # note: mesh_egress_bind should generally be localhost or loopback interface, 
+# used for service mesh egress requests
 # otherwise sidecar cannot distinguish between a client ingress request and 
 # a mesh egress request from a cluster service behind the proxy.
 # by setting it to localhost, we ensure that only services behind the proxy

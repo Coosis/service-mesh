@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use http::uri::Authority;
 use crate::circuit_breaker::CircuitBreaker;
+use http::uri::Authority;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use super::p2c::Ewma;
 
@@ -21,7 +21,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn new(authority: Authority) -> Self {
-        Self { 
+        Self {
             authority,
             healthy: AtomicBool::new(true),
             last_eject_ms: std::sync::atomic::AtomicU64::new(0),
@@ -30,10 +30,7 @@ impl Endpoint {
             in_flight: AtomicUsize::new(0),
             consec_fail: AtomicUsize::new(0),
 
-            breaker: CircuitBreaker::new(
-                0,
-                crate::circuit_breaker::CircuitConfig::default(),
-            ),
+            breaker: CircuitBreaker::new(0, crate::circuit_breaker::CircuitConfig::default()),
         }
     }
 }

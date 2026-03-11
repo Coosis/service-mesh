@@ -1,14 +1,19 @@
 use http::{Request, Response};
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::StatusCode;
 use hyper::body::{Bytes, Incoming};
-use std::{convert::Infallible, sync::{atomic::Ordering, Arc}};
+use std::{
+    convert::Infallible,
+    sync::{Arc, atomic::Ordering},
+};
 
 use crate::{circuit_breaker::BreakerState, load_balance::Cluster};
 use mesh_core::config::ProxyConfig;
 
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 pub async fn admin_handler(
@@ -21,8 +26,13 @@ pub async fn admin_handler(
         "/ready" => {
             let endpoints = cluster.endpoints.clone();
             let ok = cluster.healthy_endpoints().count() > 0;
-            let status = if ok { http::StatusCode::OK } else { http::StatusCode::SERVICE_UNAVAILABLE };
-            let res = endpoints.iter()
+            let status = if ok {
+                http::StatusCode::OK
+            } else {
+                http::StatusCode::SERVICE_UNAVAILABLE
+            };
+            let res = endpoints
+                .iter()
                 .map(|e| {
                     let health = if e.healthy.load(std::sync::atomic::Ordering::Relaxed) {
                         "healthy"
@@ -31,16 +41,18 @@ pub async fn admin_handler(
                     };
                     format!("{} - {}", e.authority, health)
                 })
-                .collect::<Vec<_>>().join("\n");
-            let body = if ok { format!("OK: \n{}", res) } else { "No healthy endpoints".to_owned() };
+                .collect::<Vec<_>>()
+                .join("\n");
+            let body = if ok {
+                format!("OK: \n{}", res)
+            } else {
+                "No healthy endpoints".to_owned()
+            };
             let body: BoxBody<Bytes, crate::error::ProxyError> = Full::from(Bytes::from(body))
                 .map_err(|e| crate::error::ProxyError::SomeError(e.to_string()))
                 .boxed();
-            let resp = http::Response::builder()
-                .status(status)
-                .body(body)
-                .unwrap();
-                // .map_err(|e| crate::error::ProxyError::SomeError(e.to_string()));
+            let resp = http::Response::builder().status(status).body(body).unwrap();
+            // .map_err(|e| crate::error::ProxyError::SomeError(e.to_string()));
             Ok(resp)
         }
         "/config" => {
@@ -68,7 +80,9 @@ pub async fn admin_handler(
                 };
                 buf.push_str(&format!(
                     "proxy_endpoint_healthy{{idx=\"{}\",authority=\"{}\"}} {}\n",
-                    i, authority_escaped, if healthy {1} else {0}
+                    i,
+                    authority_escaped,
+                    if healthy { 1 } else { 0 }
                 ));
                 buf.push_str(&format!(
                     "proxy_endpoint_in_flight{{idx=\"{}\",authority=\"{}\"}} {}\n",
@@ -80,7 +94,9 @@ pub async fn admin_handler(
                 ));
                 let rtt_secs = if ep.latency.initialized() {
                     ep.latency.get() / 1000.0
-                } else { continue; };
+                } else {
+                    continue;
+                };
                 buf.push_str(&format!(
                     "proxy_endpoint_rtt_ewma_secs{{idx=\"{}\",authority=\"{}\"}} {}\n",
                     i, authority_escaped, rtt_secs
@@ -97,7 +113,11 @@ pub async fn admin_handler(
         }
         _ => Ok(Response::builder()
             .status(http::StatusCode::NOT_FOUND)
-            .body(Full::from(Bytes::from("Not Found")).map_err(|e| crate::error::ProxyError::SomeError(e.to_string())).boxed())
+            .body(
+                Full::from(Bytes::from("Not Found"))
+                    .map_err(|e| crate::error::ProxyError::SomeError(e.to_string()))
+                    .boxed(),
+            )
             .unwrap()),
     }
 }

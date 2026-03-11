@@ -74,7 +74,9 @@ pub struct ErrorToHttp<S> {
 
 impl<S: Clone> Clone for ErrorToHttp<S> {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone() }
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -106,14 +108,23 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        ErrorToHttpFuture { inner: self.inner.call(req), _marker: std::marker::PhantomData }
+        ErrorToHttpFuture {
+            inner: self.inner.call(req),
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
 pub struct ErrorToHttpLayer;
-impl ErrorToHttpLayer { pub fn new() -> Self { Self } }
+impl ErrorToHttpLayer {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl<S> Layer<S> for ErrorToHttpLayer {
     type Service = ErrorToHttp<S>;
-    fn layer(&self, service: S) -> Self::Service { ErrorToHttp::new(service) }
+    fn layer(&self, service: S) -> Self::Service {
+        ErrorToHttp::new(service)
+    }
 }

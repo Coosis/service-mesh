@@ -11,9 +11,9 @@ pub struct Ewma {
 
 impl Ewma {
     pub fn new(tau: f64) -> Self {
-        Self { 
+        Self {
             origin: std::time::Instant::now(),
-            value: AtomicU64::new(f64::NAN.to_bits()), 
+            value: AtomicU64::new(f64::NAN.to_bits()),
             last: AtomicU64::new(0),
 
             tau,
@@ -27,7 +27,7 @@ impl Ewma {
     pub fn update(&self, sample: f64) {
         use std::sync::atomic::Ordering;
         let now_ms = self.origin.elapsed().as_millis() as u64;
-        let last   = self.last.load(Ordering::Relaxed);
+        let last = self.last.load(Ordering::Relaxed);
 
         if last == 0 {
             self.last.store(now_ms, Ordering::Relaxed);
@@ -37,11 +37,17 @@ impl Ewma {
 
         let mut dt = (now_ms - last) as f64;
         let dt_cap = 5.0 * self.tau;
-        if dt > dt_cap { dt = dt_cap; }
+        if dt > dt_cap {
+            dt = dt_cap;
+        }
 
         let alpha = 1.0 - (-dt / self.tau).exp();
-        let prev  = f64::from_bits(self.value.load(Ordering::Relaxed));
-        let new   = if prev.is_finite() { prev + alpha * (sample - prev) } else { sample };
+        let prev = f64::from_bits(self.value.load(Ordering::Relaxed));
+        let new = if prev.is_finite() {
+            prev + alpha * (sample - prev)
+        } else {
+            sample
+        };
 
         self.last.store(now_ms, Ordering::Relaxed);
         self.value.store(new.to_bits(), Ordering::Relaxed);

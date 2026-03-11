@@ -1,7 +1,10 @@
+use hyper_util::server::graceful::GracefulShutdown;
 use std::net::SocketAddr;
 use std::ops::ControlFlow;
-use hyper_util::server::graceful::GracefulShutdown;
-use tokio::{net::{TcpListener, TcpStream}, task::JoinSet};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    task::JoinSet,
+};
 use tracing::debug;
 
 use crate::Result;
@@ -10,7 +13,11 @@ use crate::Result;
 pub async fn run_graceful(
     listener: TcpListener,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    lo: impl AsyncFn((TcpStream, SocketAddr), &mut JoinSet<()>, &GracefulShutdown) -> ControlFlow<(), ()>,
+    lo: impl AsyncFn(
+        (TcpStream, SocketAddr),
+        &mut JoinSet<()>,
+        &GracefulShutdown,
+    ) -> ControlFlow<(), ()>,
 ) -> Result<()> {
     let graceful = GracefulShutdown::new();
     let mut tasks = JoinSet::<()>::new();
@@ -34,19 +41,18 @@ pub async fn run_graceful(
 
     let deadline = std::time::Duration::from_secs(10);
     let tasks_drained = tokio::time::timeout(deadline, async {
-        tokio::join!(
-            graceful.shutdown(),
-            async {
-                while let Some(res) = tasks.join_next().await {
-                    if let Err(err) = res {
-                        debug!("Task failed: {}", err);
-                    } else {
-                        // debug!("Task completed");
-                    }
+        tokio::join!(graceful.shutdown(), async {
+            while let Some(res) = tasks.join_next().await {
+                if let Err(err) = res {
+                    debug!("Task failed: {}", err);
+                } else {
+                    // debug!("Task completed");
                 }
             }
-        );
-    }).await.is_ok();
+        });
+    })
+    .await
+    .is_ok();
 
     if tasks_drained {
         debug!("Graceful shutdown complete");
@@ -58,4 +64,3 @@ pub async fn run_graceful(
 
     Ok(())
 }
-

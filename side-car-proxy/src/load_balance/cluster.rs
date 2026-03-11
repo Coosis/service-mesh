@@ -1,8 +1,11 @@
 use http::Request;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::body::Bytes;
 use hyper_util::client::legacy::connect::HttpConnector;
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tracing::{debug, info, warn};
 
 use crate::error::ProxyError;
@@ -12,8 +15,8 @@ use super::Endpoint;
 pub struct Cluster {
     pub endpoints: Vec<Arc<Endpoint>>,
     pub cursor: AtomicUsize,
-    /// clock for generating monotonic time, derived from kernel, 
-    /// in the case of kernal compromise, this may jump backwards 
+    /// clock for generating monotonic time, derived from kernel,
+    /// in the case of kernal compromise, this may jump backwards
     /// thus service is vulnerable to these attacks
     origin: std::time::Instant,
     cooldown_ms: u64,
@@ -45,11 +48,14 @@ impl Cluster {
 
     #[inline]
     pub fn healthy_endpoints(&self) -> impl Iterator<Item = &Arc<Endpoint>> {
-        self.endpoints.iter()
-            .filter(move |e| {
-                info!("endpoint {} healthy={}", e.authority, e.healthy.load(std::sync::atomic::Ordering::Relaxed));
+        self.endpoints.iter().filter(move |e| {
+            info!(
+                "endpoint {} healthy={}",
+                e.authority,
                 e.healthy.load(std::sync::atomic::Ordering::Relaxed)
-            })
+            );
+            e.healthy.load(std::sync::atomic::Ordering::Relaxed)
+        })
     }
 
     pub fn spawn_active_health(self: Arc<Self>) {
@@ -93,14 +99,10 @@ impl Cluster {
         let empty = Empty::<Bytes>::new()
             .map_err(|e| ProxyError::SomeError(format!("Empty body error: {}", e)))
             .boxed();
-        let req = Request::get(uri)
-            .body(empty)
-            .unwrap();
+        let req = Request::get(uri).body(empty).unwrap();
 
-        let res = tokio::time::timeout(
-            std::time::Duration::from_secs(3), 
-            self.client.request(req)
-        ).await;
+        let res =
+            tokio::time::timeout(std::time::Duration::from_secs(3), self.client.request(req)).await;
 
         match res {
             Ok(Ok(resp)) => {

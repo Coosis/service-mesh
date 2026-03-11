@@ -1,6 +1,6 @@
 // talks with etcd
-use crate::error::ProxyError;
 use crate::Result;
+use crate::error::ProxyError;
 
 pub trait Registry {
     fn register(&self, service_name: &str, address: &str) -> Result<()>;
@@ -8,13 +8,11 @@ pub trait Registry {
     fn discover(&self, service_name: &str) -> Option<Vec<String>>;
 }
 
-pub struct EtcdRegistry {
-}
+pub struct EtcdRegistry {}
 
 impl EtcdRegistry {
     pub fn new() -> Self {
-        EtcdRegistry {
-        }
+        EtcdRegistry {}
     }
 }
 

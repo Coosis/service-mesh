@@ -1,5 +1,5 @@
-use std::path::Path;
 use mesh_core::config::{Config, ProxyConfig};
+use std::path::Path;
 use tokio::{fs::File, io::AsyncReadExt};
 
 type Result<T> = std::result::Result<T, crate::error::Error>;
@@ -18,6 +18,5 @@ pub fn from_content(content: &str) -> Result<Config> {
 }
 
 pub fn to_json(config: &ProxyConfig) -> Result<String> {
-    serde_json::to_string(config)
-        .map_err(|e| e.into())
+    serde_json::to_string(config).map_err(|e| e.into())
 }

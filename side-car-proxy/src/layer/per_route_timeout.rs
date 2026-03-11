@@ -1,6 +1,6 @@
 use std::fmt::Display;
-use std::{pin::Pin, task::Poll};
 use std::time::Duration;
+use std::{pin::Pin, task::Poll};
 
 use http::Request;
 use hyper::body::Body;
@@ -16,7 +16,9 @@ pub enum TimeoutError<E> {
 }
 
 impl<E> Display for TimeoutError<E>
-where E: Display {
+where
+    E: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TimeoutError::Inner(e) => write!(f, "Inner error: {}", e),
@@ -42,11 +44,8 @@ pin_project! {
 }
 
 impl<B> TimeoutBody<B> {
-    pub fn new(
-        inner: B,
-        duration: std::time::Duration,
-    ) -> Self {
-        TimeoutBody { 
+    pub fn new(inner: B, duration: std::time::Duration) -> Self {
+        TimeoutBody {
             inner,
             sleep: tokio::time::sleep(duration),
             duration: tokio::time::Duration::from(duration),
@@ -54,8 +53,10 @@ impl<B> TimeoutBody<B> {
     }
 }
 
-impl<B> Body for TimeoutBody<B> 
-where B: Body {
+impl<B> Body for TimeoutBody<B>
+where
+    B: Body,
+{
     type Data = B::Data;
 
     type Error = TimeoutError<B::Error>;
@@ -100,7 +101,10 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
         if this.sleep.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Err(Box::new(std::io::Error::new(std::io::ErrorKind::TimedOut, "request timed out"))));
+            return Poll::Ready(Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request timed out",
+            ))));
         }
 
         match this.inner.as_mut().poll(cx) {
@@ -118,12 +122,14 @@ pub struct PerRouteTimeout<S> {
     default: Duration,
 }
 
-impl<S, B> Service<Request<B>> for PerRouteTimeout<S> 
-where S: Service<Request<B>> + Send + 'static,
-      S::Response: Send + 'static,
-      S::Error: Into<BoxError> + Send + Sync + 'static,
-      S::Future: Send + 'static,
-      B: Send + 'static {
+impl<S, B> Service<Request<B>> for PerRouteTimeout<S>
+where
+    S: Service<Request<B>> + Send + 'static,
+    S::Response: Send + 'static,
+    S::Error: Into<BoxError> + Send + Sync + 'static,
+    S::Future: Send + 'static,
+    B: Send + 'static,
+{
     type Response = S::Response;
 
     type Error = BoxError;
@@ -134,7 +140,6 @@ where S: Service<Request<B>> + Send + 'static,
             Poll::Pending => Poll::Pending,
             Poll::Ready(r) => Poll::Ready(r.map_err(Into::into)),
         }
-
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
@@ -142,10 +147,7 @@ where S: Service<Request<B>> + Send + 'static,
         let timeout = get_timeout((&self.rules).iter(), path, self.default);
         let fut = self.inner.call(req);
         let sleep = tokio::time::sleep(timeout);
-        PerRouteFuture {
-            inner: fut,
-            sleep,
-        }
+        PerRouteFuture { inner: fut, sleep }
     }
 }
 
@@ -156,13 +158,11 @@ pub struct PerRouteTimeoutLayer {
 
 impl PerRouteTimeoutLayer {
     pub fn new(rules: Vec<(String, Duration)>, default: Duration) -> Self {
-        let rules = rules.into_iter()
+        let rules = rules
+            .into_iter()
             .map(|(s, d)| (fragments_from_str(&s), d))
             .collect();
-        PerRouteTimeoutLayer {
-            rules,
-            default,
-        }
+        PerRouteTimeoutLayer { rules, default }
     }
 }
 

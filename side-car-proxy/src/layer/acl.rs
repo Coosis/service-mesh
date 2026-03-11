@@ -1,14 +1,14 @@
 use std::{pin::Pin, task::Poll};
 
 use http::Request;
-use mesh_core::acl::{AccessStrategy, Listener, ACL};
+use mesh_core::acl::{ACL, AccessStrategy, Listener};
 use pin_project_lite::pin_project;
 use tower::{BoxError, Layer, Service};
 
 use crate::layer::path::get_access_strategy;
 
 pin_project! {
-    pub struct AclFuture<F> { 
+    pub struct AclFuture<F> {
         #[pin]
         inner: F,
         access_strategy: AccessStrategy,
@@ -24,7 +24,10 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         if self.access_strategy == AccessStrategy::Deny {
-            return Poll::Ready(Err(Box::new(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Access Denied"))));
+            return Poll::Ready(Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Access Denied",
+            ))));
         }
         let mut this = self.project();
         match this.inner.as_mut().poll(cx) {
@@ -35,19 +38,20 @@ where
     }
 }
 
-
 pub struct AclService<S> {
     inner: S,
     acl: ACL,
     listener: Listener,
 }
 
-impl<S, B> Service<Request<B>> for AclService<S> 
-where S: Service<Request<B>> + Send + 'static,
-      S::Response: Send + 'static,
-      S::Error: Into<BoxError> + Send + Sync + 'static,
-      S::Future: Send + 'static,
-      B: Send + 'static {
+impl<S, B> Service<Request<B>> for AclService<S>
+where
+    S: Service<Request<B>> + Send + 'static,
+    S::Response: Send + 'static,
+    S::Error: Into<BoxError> + Send + Sync + 'static,
+    S::Future: Send + 'static,
+    B: Send + 'static,
+{
     type Response = S::Response;
 
     type Error = BoxError;
@@ -71,21 +75,14 @@ where S: Service<Request<B>> + Send + 'static,
     }
 }
 
-
 pub struct AclLayer {
     acl: ACL,
     listener: Listener,
 }
 
 impl AclLayer {
-    pub fn new(
-        acl: ACL,
-        listener: Listener,
-    ) -> Self {
-        AclLayer { 
-            acl,
-            listener,
-        }
+    pub fn new(acl: ACL, listener: Listener) -> Self {
+        AclLayer { acl, listener }
     }
 }
 

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use super::{Cluster, Endpoint};
+use std::sync::Arc;
 
 impl Cluster {
     pub fn pick_round_robin(&self) -> Option<Arc<Endpoint>> {
@@ -8,7 +8,9 @@ impl Cluster {
             return None;
         }
 
-        let idx = self.cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let idx = self
+            .cursor
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Some(healthy[idx % healthy.len()].clone())
     }
 }

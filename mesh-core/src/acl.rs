@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
-pub enum AccessStrategy { 
+pub enum AccessStrategy {
     #[default]
     #[serde(rename = "allow")]
     Allow,

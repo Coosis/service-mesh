@@ -1,10 +1,15 @@
-use std::{collections::HashMap, net::SocketAddr, pin::Pin, task::{Context, Poll}};
-use std::sync::Arc;
-use pin_project_lite::pin_project;
-use tower::Service;
-use hyper_util::client::legacy::connect::dns::{GaiAddrs, GaiFuture, GaiResolver, Name};
-use crate::{error::ProxyError, registry::EtcdRegistry};
 use crate::registry::Registry;
+use crate::{error::ProxyError, registry::EtcdRegistry};
+use hyper_util::client::legacy::connect::dns::{GaiAddrs, GaiFuture, GaiResolver, Name};
+use pin_project_lite::pin_project;
+use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tower::Service;
 
 pub struct ResolverAddr(Vec<SocketAddr>);
 impl Iterator for ResolverAddr {
@@ -21,7 +26,7 @@ impl From<Vec<SocketAddr>> for ResolverAddr {
 }
 
 pin_project! {
-    pub struct ResolverFuture<T, R> 
+    pub struct ResolverFuture<T, R>
     where R: Registry {
         #[pin]
         inner: T,
@@ -31,20 +36,20 @@ pin_project! {
     }
 }
 
-impl<R> Future for ResolverFuture<GaiFuture, R> 
-where R: Registry {
+impl<R> Future for ResolverFuture<GaiFuture, R>
+where
+    R: Registry,
+{
     type Output = std::result::Result<ResolverAddr, ProxyError>;
 
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(addr) = self.dev_map.get(&self.name) {
             Poll::Ready(Ok(vec![*addr].into()))
         } else {
             if let Some(r) = &self.registry {
                 if let Some(v) = r.discover(&self.name) {
-                    let addrs = v.into_iter()
+                    let addrs = v
+                        .into_iter()
                         .filter_map(|s| s.parse().ok())
                         .collect::<Vec<SocketAddr>>();
                     if !addrs.is_empty() {
@@ -53,12 +58,13 @@ where R: Registry {
                 }
             }
             let projected = self.project();
-            projected.inner.poll(cx)
+            projected
+                .inner
+                .poll(cx)
                 .map(|res| res.map_err(|e| e.into()))
-                .map(|addrs| addrs.map(|gai_addrs: GaiAddrs| {
-                    gai_addrs.collect::<Vec<SocketAddr>>().into()
-
-                }))
+                .map(|addrs| {
+                    addrs.map(|gai_addrs: GaiAddrs| gai_addrs.collect::<Vec<SocketAddr>>().into())
+                })
         }
     }
 }
